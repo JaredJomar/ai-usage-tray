@@ -1,7 +1,3 @@
-"""
-Settings window with authentication management and live usage display.
-Uses PyQt6 with Catppuccin Mocha theme.
-"""
 import sys
 import json
 import time
@@ -12,6 +8,8 @@ import requests
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QSpinBox, QCheckBox, QGroupBox, QFrame,
+    QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
@@ -20,96 +18,76 @@ from auth import AuthManager, AuthStatus
 from config import AppConfig, load_config, save_config, get_codex_auth_path
 from logger import Logger
 
-import sys
 import winreg
 from pathlib import Path
 
 
-# ── Catppuccin Mocha Tokens ─────────────────────────────────────────────────
 class Ctp:
-    BG       = "#1e1e2e"
-    SURFACE  = "#313244"
-    OVERLAY  = "#45475a"
-    TEXT     = "#cdd6f4"
-    SUBTEXT  = "#a6adc8"
-    BLUE     = "#89b4fa"
-    GREEN    = "#a6e3a1"
-    RED      = "#f38ba8"
-    PEACH    = "#fab387"
-    MAUVE    = "#cba6f7"
-    SURFACE2 = "#585b70"
-    BASE     = "#181825"
-    MANTLE   = "#11111b"
-    LAVENDER = "#b4befe"
+    BG_START = "#0f172a"
+    BG_END = "#1e3a5f"
+    CARD = "#1e293b"
+    CARD_ELEVATED = "#26354a"
+    BORDER = "#334155"
+    TEXT = "#f8fafc"
+    SUBTEXT = "#94a3b8"
+    MUTED = "#64748b"
+    BLUE = "#38bdf8"
+    BLUE_DEEP = "#0ea5e9"
+    GREEN = "#22c55e"
+    RED = "#ef4444"
+    AMBER = "#f59e0b"
+    WHITE = "#ffffff"
 
 
-# ── Signals bridge for thread → UI ───────────────────────────────────────────
 class AuthSignals(QObject):
     status_update = pyqtSignal(str, object)
     login_result = pyqtSignal(str, bool, str)
     usage_update = pyqtSignal(object)
 
 
-# ── Styled widgets ───────────────────────────────────────────────────────────
 def make_button(text, color=None, accent=False):
-    """Create a styled button with optional accent color."""
     btn = QPushButton(text)
-    style = """
-        QPushButton {{
-            background: {bg};
-            color: {text};
-            border: 1px solid {border};
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-weight: 500;
-            min-width: 90px;
-        }}
-        QPushButton:hover {{
-            background: {hover};
-        }}
-        QPushButton:pressed {{
-            background: {pressed};
-        }}
-        QPushButton:disabled {{
-            background: {bg};
-            color: {muted};
-            border-color: {bg};
-        }}
-    """
     if accent and color:
-        bg = Ctp.SURFACE
-        btn.setStyleSheet(style.format(
-            bg=bg, text=color, border=color,
-            hover=Ctp.OVERLAY, pressed=Ctp.SURFACE2,
-            muted=Ctp.SURFACE2
-        ))
+        background = color
+        foreground = Ctp.BG_START
+        hover = Ctp.WHITE
+        border = color
     else:
-        btn.setStyleSheet(style.format(
-            bg=Ctp.SURFACE, text=Ctp.TEXT, border=Ctp.OVERLAY,
-            hover=Ctp.OVERLAY, pressed=Ctp.SURFACE2,
-            muted=Ctp.SURFACE2
-        ))
+        background = Ctp.CARD_ELEVATED
+        foreground = Ctp.TEXT
+        hover = Ctp.BORDER
+        border = Ctp.BORDER
+    btn.setStyleSheet("""
+        QPushButton {{
+            background: {background}; color: {foreground}; border: 1px solid {border};
+            border-radius: 8px; padding: 8px 16px; min-width: 88px;
+            font-family: 'Aptos Display'; font-size: 12px; font-weight: 600;
+        }}
+        QPushButton:hover {{ background: {hover}; }}
+        QPushButton:pressed {{ background: {border}; color: {foreground}; }}
+        QPushButton:disabled {{ background: {card}; color: {muted}; border-color: {card}; }}
+    """.format(
+        background=background, foreground=foreground, border=border, hover=hover,
+        card=Ctp.CARD, muted=Ctp.MUTED,
+    ))
     return btn
 
 
 def make_dot(color):
-    """Return a colored circle string."""
     return '<span style="color:{};">●</span>'.format(color)
 
 
 def make_bar(percent, width=20):
-    """Build a Unicode block bar: filled ▰ + empty ▱."""
     filled = round(width * min(percent, 100) / 100)
     return '<span style="color:{};">{}</span><span style="color:{};">{}</span>'.format(
-        Ctp.BLUE if percent < 80 else (Ctp.PEACH if percent < 95 else Ctp.RED),
+        Ctp.BLUE if percent < 80 else (Ctp.AMBER if percent < 95 else Ctp.RED),
         "▰" * filled,
-        Ctp.SURFACE2,
-        "▱" * (width - filled)
+        Ctp.BORDER,
+        "▱" * (width - filled),
     )
 
 
 def format_reset(unix_ts):
-    """Human-readable time remaining until a unix timestamp."""
     now = time.time()
     diff = int(unix_ts - now)
     if diff <= 0:
@@ -121,7 +99,6 @@ def format_reset(unix_ts):
     return "{}m".format(m)
 
 
-# ── Main Window ──────────────────────────────────────────────────────────────
 class SettingsWindow(QWidget):
     REGISTRY_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
     APP_NAME = "AIUsageTray"
@@ -170,283 +147,237 @@ class SettingsWindow(QWidget):
             Logger.error("settings", "Failed to set auto-start: {}".format(e))
 
     def _init_ui(self):
-        self.setWindowTitle("AI Usage Tray — Settings")
-        self.setFixedSize(620, 680)
+        self.setObjectName("settingsWindow")
+        self.setWindowTitle("AI Usage Tray — Codex Settings")
+        self.setFixedSize(640, 720)
         self.setStyleSheet("""
-            QWidget {{
-                background-color: {bg};
-                color: {text};
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 13px;
+            QWidget#settingsWindow {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {bg_start}, stop:1 {bg_end});
+                color: {text}; font-family: 'Aptos'; font-size: 12px;
             }}
-            QTabWidget::pane {{
-                border: 1px solid {overlay};
-                border-radius: 10px;
-                background: {bg};
-            }}
-            QTabBar {{
-                background: transparent;
-            }}
+            QTabWidget::pane {{ border: 0; background: transparent; }}
+            QTabBar {{ background: transparent; }}
             QTabBar::tab {{
-                background: {surface};
-                color: {text};
-                padding: 10px 28px;
-                border: 1px solid {overlay};
-                border-bottom: none;
-                border-radius: 10px 10px 0 0;
-                margin-right: 3px;
-                font-weight: 500;
+                background: transparent; color: {subtext}; border: 0;
+                border-bottom: 2px solid transparent; padding: 9px 20px;
+                font-family: 'Aptos Display'; font-size: 12px; font-weight: 600;
             }}
-            QTabBar::tab:selected {{
-                background: {bg};
-                border-color: {overlay};
-                color: {blue};
-            }}
-            QTabBar::tab:hover:!selected {{
-                background: {overlay};
+            QTabBar::tab:selected {{ color: {text}; border-bottom-color: {blue}; }}
+            QTabBar::tab:hover:!selected {{ color: {text}; }}
+            QFrame#usageCard, QFrame#headerCard, QFrame#statusBar {{
+                background: {card}; border: 1px solid {border}; border-radius: 12px;
             }}
             QGroupBox {{
-                border: 1px solid {overlay};
-                border-radius: 10px;
-                margin-top: 14px;
-                padding: 18px 14px 14px 14px;
-                font-weight: 600;
-                font-size: 13px;
-                color: {lavender};
+                background: {card}; border: 1px solid {border}; border-radius: 10px;
+                margin-top: 12px; padding: 15px 13px 12px;
+                color: {text}; font-family: 'Aptos Display'; font-size: 12px; font-weight: 600;
             }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 14px;
-                padding: 0 8px;
-                color: {lavender};
-            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
             QSpinBox {{
-                background: {surface};
-                color: {text};
-                border: 1px solid {overlay};
-                border-radius: 6px;
-                padding: 6px 10px;
-                min-width: 80px;
-                font-size: 13px;
+                background: {card_elevated}; color: {text}; border: 1px solid {border};
+                border-radius: 7px; padding: 6px 8px; min-width: 82px;
             }}
-            QSpinBox:focus {{
-                border-color: {blue};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background: {overlay};
-                border: none;
-                width: 20px;
-                border-radius: 3px;
-            }}
-            QCheckBox {{
-                spacing: 10px;
-                font-size: 13px;
-            }}
+            QSpinBox:focus {{ border-color: {blue}; }}
+            QSpinBox::up-button, QSpinBox::down-button {{ width: 18px; background: {border}; border: 0; }}
+            QCheckBox {{ color: {text}; spacing: 8px; }}
             QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
-                border: 2px solid {overlay};
-                border-radius: 5px;
-                background: {surface};
+                width: 16px; height: 16px; border-radius: 5px;
+                border: 1px solid {border}; background: {card_elevated};
             }}
-            QCheckBox::indicator:checked {{
-                background: {blue};
-                border-color: {blue};
+            QCheckBox::indicator:checked {{ background: {blue}; border-color: {blue}; }}
+            QTableWidget {{
+                background: transparent; border: 0; gridline-color: {border}; color: {text};
+                selection-background-color: {card_elevated}; selection-color: {text};
             }}
-            QCheckBox::indicator:hover {{
-                border-color: {blue};
-            }}
-            QFrame {{
-                border: none;
+            QHeaderView::section {{
+                background: transparent; color: {subtext}; border: 0; border-bottom: 1px solid {border};
+                padding: 4px 5px; font-family: 'Aptos Display'; font-size: 10px; font-weight: 600;
             }}
         """.format(
-            bg=Ctp.BG, text=Ctp.TEXT, surface=Ctp.SURFACE,
-            overlay=Ctp.OVERLAY, blue=Ctp.BLUE, lavender=Ctp.LAVENDER
+            bg_start=Ctp.BG_START, bg_end=Ctp.BG_END, card=Ctp.CARD,
+            card_elevated=Ctp.CARD_ELEVATED, border=Ctp.BORDER, text=Ctp.TEXT,
+            subtext=Ctp.SUBTEXT, blue=Ctp.BLUE,
         ))
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(4)
-
         tabs = QTabWidget()
-        tabs.addTab(self._create_auth_tab(), "  Authentication  ")
-        tabs.addTab(self._create_settings_tab(), "  Settings  ")
+        tabs.addTab(self._create_auth_tab(), "Usage")
+        tabs.addTab(self._create_settings_tab(), "Settings")
         root.addWidget(tabs)
 
-    # ── Auth Tab ─────────────────────────────────────────────────────────
+    def _section_label(self, text):
+        label = QLabel(text)
+        label.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 11px; font-weight: 700;".format(Ctp.SUBTEXT))
+        return label
+
+    def _make_usage_card(self, title):
+        card = QFrame()
+        card.setObjectName("usageCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(7)
+
+        heading = QHBoxLayout()
+        label = QLabel(title)
+        label.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 13px; font-weight: 700;".format(Ctp.TEXT))
+        percent = QLabel("0%")
+        percent.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 18px; font-weight: 700;".format(Ctp.TEXT))
+        heading.addWidget(label)
+        heading.addStretch()
+        heading.addWidget(percent)
+        layout.addLayout(heading)
+
+        progress = QProgressBar()
+        progress.setRange(0, 100)
+        progress.setTextVisible(False)
+        progress.setFixedHeight(9)
+        layout.addWidget(progress)
+
+        meta = QHBoxLayout()
+        detail = QLabel("Resets in: —")
+        detail.setStyleSheet("color: {}; font-size: 10px;".format(Ctp.SUBTEXT))
+        delta = QLabel("▼4%")
+        delta.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 10px; font-weight: 700;".format(Ctp.GREEN))
+        meta.addWidget(detail)
+        meta.addStretch()
+        meta.addWidget(delta)
+        layout.addLayout(meta)
+
+        micro = QLabel()
+        micro.setVisible(False)
+        layout.addWidget(micro)
+        return card, percent, progress, detail, delta, micro
+
+    def _set_progress_style(self, progress, percent):
+        color = Ctp.BLUE if percent < 80 else (Ctp.AMBER if percent < 95 else Ctp.RED)
+        progress.setStyleSheet("""
+            QProgressBar {{ background: {border}; border: 0; border-radius: 4px; }}
+            QProgressBar::chunk {{
+                border-radius: 4px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {blue}, stop:1 {color});
+            }}
+        """.format(border=Ctp.BORDER, blue=Ctp.BLUE, color=color))
+
     def _create_auth_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(5, 10, 5, 0)
+        layout.setSpacing(9)
 
-        # Header
-        title = QLabel("OpenAI Codex")
-        title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: {};".format(Ctp.TEXT))
-        layout.addWidget(title)
+        header = QFrame()
+        header.setObjectName("headerCard")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(15, 11, 15, 11)
+        provider = QVBoxLayout()
+        provider.setSpacing(1)
+        self._provider_header = QLabel("{}  Codex 1  11%".format(make_dot(Ctp.BLUE)))
+        self._provider_header.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 15px; font-weight: 700;".format(Ctp.TEXT))
+        provider.addWidget(self._provider_header)
+        provider_caption = QLabel("Usage overview")
+        provider_caption.setStyleSheet("color: {}; font-size: 10px;".format(Ctp.SUBTEXT))
+        provider.addWidget(provider_caption)
+        header_layout.addLayout(provider)
+        header_layout.addStretch()
+        self._plan_badge = QLabel("CODEX")
+        self._plan_badge.setStyleSheet("background: {}; color: {}; border-radius: 7px; padding: 5px 8px; font-family: 'Aptos Display'; font-size: 10px; font-weight: 700;".format(Ctp.CARD_ELEVATED, Ctp.BLUE))
+        header_layout.addWidget(self._plan_badge)
+        layout.addWidget(header)
 
-        subtitle = QLabel("Authentication & Usage Monitor")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: {}; font-size: 12px;".format(Ctp.SUBTEXT))
-        layout.addWidget(subtitle)
-        layout.addSpacing(4)
-
-        # ── Auth Status Group ────────────────────────────────────────────
-        auth_group = QGroupBox("Connection Status")
-        auth_lay = QVBoxLayout(auth_group)
-        auth_lay.setSpacing(10)
-
-        status_row = QHBoxLayout()
+        connection = QHBoxLayout()
         self._status_dot = QLabel(make_dot(Ctp.SUBTEXT))
-        self._status_dot.setFont(QFont("Segoe UI", 14))
-        status_row.addWidget(self._status_dot)
-
-        self._codex_status = QLabel("Checking...")
-        self._codex_status.setWordWrap(True)
-        self._codex_status.setStyleSheet("font-size: 13px;")
-        status_row.addWidget(self._codex_status, 1)
-        auth_lay.addLayout(status_row)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        self._codex_login_btn = make_button("Login", accent=True, color=Ctp.GREEN)
+        self._status_dot.setStyleSheet("font-size: 13px;")
+        connection.addWidget(self._status_dot)
+        self._codex_status = QLabel("Checking connection…")
+        self._codex_status.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.SUBTEXT))
+        connection.addWidget(self._codex_status, 1)
+        self._codex_login_btn = make_button("Login", accent=True, color=Ctp.BLUE)
         self._codex_login_btn.clicked.connect(self._login_codex)
-        btn_row.addWidget(self._codex_login_btn)
-
-        self._codex_logout_btn = make_button("Logout", accent=True, color=Ctp.RED)
+        connection.addWidget(self._codex_login_btn)
+        self._codex_logout_btn = make_button("Logout")
         self._codex_logout_btn.clicked.connect(self._logout_codex)
         self._codex_logout_btn.setEnabled(False)
-        btn_row.addWidget(self._codex_logout_btn)
+        connection.addWidget(self._codex_logout_btn)
+        layout.addLayout(connection)
 
-        auth_lay.addLayout(btn_row)
-        layout.addWidget(auth_group)
+        layout.addWidget(self._section_label("RATE LIMITS"))
+        (
+            card, self._usage_5h_percent, self._usage_5h_bar, self._usage_5h_detail,
+            self._usage_5h_delta, self._usage_5h_micro,
+        ) = self._make_usage_card("5-Hour Session")
+        layout.addWidget(card)
+        (
+            card, self._usage_7d_percent, self._usage_7d_bar, self._usage_7d_detail,
+            self._usage_7d_delta, self._usage_7d_micro,
+        ) = self._make_usage_card("Weekly Limit")
+        layout.addWidget(card)
 
-        # ── Usage Display Group ──────────────────────────────────────────
-        usage_group = QGroupBox("Live Usage")
-        usage_lay = QVBoxLayout(usage_group)
-        usage_lay.setSpacing(10)
+        table_card = QFrame()
+        table_card.setObjectName("usageCard")
+        table_layout = QVBoxLayout(table_card)
+        table_layout.setContentsMargins(14, 10, 14, 10)
+        table_layout.setSpacing(3)
+        table_layout.addWidget(self._section_label("TOKEN USAGE"))
+        self._token_table = QTableWidget(1, 4)
+        self._token_table.setHorizontalHeaderLabels(["Input", "Output", "Cache", "Cost"])
+        self._token_table.setVerticalHeaderLabels(["Session"])
+        self._token_table.verticalHeader().setVisible(False)
+        self._token_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._token_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._token_table.setFixedHeight(49)
+        self._token_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for column in range(4):
+            item = QTableWidgetItem("—")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._token_table.setItem(0, column, item)
+        table_layout.addWidget(self._token_table)
+        layout.addWidget(table_card)
 
-        self._usage_stack = QVBoxLayout()
+        model_row = QHBoxLayout()
+        model_row.addWidget(self._section_label("MODEL BREAKDOWN"))
+        model_row.addStretch()
+        self._model_summary = QLabel("Codex · current session")
+        self._model_summary.setStyleSheet("color: {}; font-size: 10px;".format(Ctp.SUBTEXT))
+        model_row.addWidget(self._model_summary)
+        layout.addLayout(model_row)
 
-        # Loading placeholder
-        self._usage_loading_label = QLabel("Loading usage data...")
-        self._usage_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._usage_loading_label.setStyleSheet("color: {}; padding: 12px;".format(Ctp.SUBTEXT))
-        self._usage_stack.addWidget(self._usage_loading_label)
-
-        # Actual usage container (hidden until data arrives)
-        self._usage_container = QWidget()
-        uc_layout = QVBoxLayout(self._usage_container)
-        uc_layout.setContentsMargins(0, 0, 0, 0)
-        uc_layout.setSpacing(10)
-        self._usage_container.setVisible(False)
-
-        # 5-hour window
-        self._usage_5h_title = QLabel()
-        self._usage_5h_title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
-        self._usage_5h_title.setStyleSheet("color: {};".format(Ctp.TEXT))
-        uc_layout.addWidget(self._usage_5h_title)
-
-        self._usage_5h_bar_label = QLabel()
-        self._usage_5h_bar_label.setFont(QFont("Consolas", 13))
-        self._usage_5h_bar_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        uc_layout.addWidget(self._usage_5h_bar_label)
-
-        self._usage_5h_detail = QLabel()
-        self._usage_5h_detail.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.SUBTEXT))
-        uc_layout.addWidget(self._usage_5h_detail)
-
-        # Separator
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.HLine)
-        sep1.setStyleSheet("background: {}; max-height: 1px;".format(Ctp.OVERLAY))
-        uc_layout.addWidget(sep1)
-
-        # 7-day window
-        self._usage_7d_title = QLabel()
-        self._usage_7d_title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
-        self._usage_7d_title.setStyleSheet("color: {};".format(Ctp.TEXT))
-        uc_layout.addWidget(self._usage_7d_title)
-
-        self._usage_7d_bar_label = QLabel()
-        self._usage_7d_bar_label.setFont(QFont("Consolas", 13))
-        self._usage_7d_bar_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        uc_layout.addWidget(self._usage_7d_bar_label)
-
-        self._usage_7d_detail = QLabel()
-        self._usage_7d_detail.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.SUBTEXT))
-        uc_layout.addWidget(self._usage_7d_detail)
-
-        # Separator
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet("background: {}; max-height: 1px;".format(Ctp.OVERLAY))
-        uc_layout.addWidget(sep2)
-
-        # Reset credits
-        self._usage_credits_label = QLabel()
-        self._usage_credits_label.setStyleSheet("font-size: 12px;")
-        uc_layout.addWidget(self._usage_credits_label)
-
-        # Plan type badge
-        self._plan_badge = QLabel()
-        self._plan_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._plan_badge.setStyleSheet("""
-            background: {surface};
-            color: {mauve};
-            border: 1px solid {overlay};
-            border-radius: 6px;
-            padding: 4px 12px;
-            font-size: 11px;
-            font-weight: 600;
-            max-width: 120px;
-        """.format(surface=Ctp.SURFACE, mauve=Ctp.MAUVE, overlay=Ctp.OVERLAY))
-        uc_layout.addWidget(self._plan_badge, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        self._usage_stack.addWidget(self._usage_container)
-        usage_lay.addLayout(self._usage_stack)
-
-        # Refresh button
-        usage_btn_row = QHBoxLayout()
-        usage_btn_row.addStretch()
-        self._usage_refresh_btn = make_button("↻  Refresh", accent=True, color=Ctp.BLUE)
+        status_bar = QFrame()
+        status_bar.setObjectName("statusBar")
+        status_layout = QHBoxLayout(status_bar)
+        status_layout.setContentsMargins(12, 6, 12, 6)
+        self._updated_status = QLabel("{}  Updated just now".format(make_dot(Ctp.GREEN)))
+        self._updated_status.setStyleSheet("color: {}; font-size: 10px;".format(Ctp.SUBTEXT))
+        status_layout.addWidget(self._updated_status)
+        status_layout.addStretch()
+        self._usage_refresh_btn = make_button("Refresh")
         self._usage_refresh_btn.clicked.connect(self._fetch_usage)
-        usage_btn_row.addWidget(self._usage_refresh_btn)
-        usage_lay.addLayout(usage_btn_row)
+        status_layout.addWidget(self._usage_refresh_btn)
+        layout.addWidget(status_bar)
 
-        layout.addWidget(usage_group)
-        layout.addStretch()
-
-        # Initial status check + usage fetch
         QTimer.singleShot(100, self._refresh_status)
         QTimer.singleShot(300, self._fetch_usage)
-
         return widget
 
-    # ── Settings Tab ─────────────────────────────────────────────────────
     def _create_settings_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(10, 8, 10, 6)
+        layout.setSpacing(9)
 
-        title = QLabel("General Settings")
-        title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: {};".format(Ctp.TEXT))
+        title = QLabel("Preferences")
+        title.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 19px; font-weight: 700;".format(Ctp.TEXT))
         layout.addWidget(title)
+        subtitle = QLabel("Control how AI Usage Tray monitors your Codex account.")
+        subtitle.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.SUBTEXT))
+        layout.addWidget(subtitle)
 
-        layout.addSpacing(4)
-
-        # ── Polling Group ────────────────────────────────────────────────
         poll_group = QGroupBox("Polling")
         poll_lay = QVBoxLayout(poll_group)
-        poll_lay.setSpacing(10)
-
         refresh_row = QHBoxLayout()
-        refresh_row.addWidget(QLabel("Refresh Interval:"))
+        refresh_row.addWidget(QLabel("Refresh interval"))
         refresh_row.addStretch()
         self._refresh_spin = QSpinBox()
         self._refresh_spin.setRange(30, 3600)
@@ -454,9 +385,8 @@ class SettingsWindow(QWidget):
         self._refresh_spin.setSuffix(" s")
         refresh_row.addWidget(self._refresh_spin)
         poll_lay.addLayout(refresh_row)
-
         cache_row = QHBoxLayout()
-        cache_row.addWidget(QLabel("Cache TTL:"))
+        cache_row.addWidget(QLabel("Cache TTL"))
         cache_row.addStretch()
         self._cache_spin = QSpinBox()
         self._cache_spin.setRange(10, 300)
@@ -464,20 +394,15 @@ class SettingsWindow(QWidget):
         self._cache_spin.setSuffix(" s")
         cache_row.addWidget(self._cache_spin)
         poll_lay.addLayout(cache_row)
-
         layout.addWidget(poll_group)
 
-        # ── Notifications Group ──────────────────────────────────────────
         notif_group = QGroupBox("Notifications")
         notif_lay = QVBoxLayout(notif_group)
-        notif_lay.setSpacing(10)
-
-        self._notify_check = QCheckBox("Enable Notifications")
+        self._notify_check = QCheckBox("Enable notifications")
         self._notify_check.setChecked(self._config.notifications_enabled)
         notif_lay.addWidget(self._notify_check)
-
         warn_row = QHBoxLayout()
-        warn_row.addWidget(QLabel("Warning Threshold:"))
+        warn_row.addWidget(QLabel("Warning threshold"))
         warn_row.addStretch()
         self._warn_spin = QSpinBox()
         self._warn_spin.setRange(50, 100)
@@ -485,9 +410,8 @@ class SettingsWindow(QWidget):
         self._warn_spin.setSuffix(" %")
         warn_row.addWidget(self._warn_spin)
         notif_lay.addLayout(warn_row)
-
         crit_row = QHBoxLayout()
-        crit_row.addWidget(QLabel("Critical Threshold:"))
+        crit_row.addWidget(QLabel("Critical threshold"))
         crit_row.addStretch()
         self._crit_spin = QSpinBox()
         self._crit_spin.setRange(50, 100)
@@ -495,42 +419,28 @@ class SettingsWindow(QWidget):
         self._crit_spin.setSuffix(" %")
         crit_row.addWidget(self._crit_spin)
         notif_lay.addLayout(crit_row)
-
         layout.addWidget(notif_group)
 
-        # ── Codex Group ──────────────────────────────────────────────────
         codex_group = QGroupBox("Codex")
         codex_lay = QVBoxLayout(codex_group)
-        codex_lay.setSpacing(8)
-
-        self._codex_check = QCheckBox("Enable Codex Monitoring")
+        self._codex_check = QCheckBox("Enable Codex monitoring")
         self._codex_check.setChecked(self._config.codex_enabled)
         codex_lay.addWidget(self._codex_check)
-
         layout.addWidget(codex_group)
 
-        # ── Startup Group ────────────────────────────────────────────────
         startup_group = QGroupBox("Startup")
         startup_lay = QVBoxLayout(startup_group)
-        startup_lay.setSpacing(8)
-
-        self._autostart_check = QCheckBox("Launch on Windows Startup")
+        self._autostart_check = QCheckBox("Launch on Windows startup")
         self._autostart_check.setChecked(self._is_auto_start_enabled())
         startup_lay.addWidget(self._autostart_check)
-
         layout.addWidget(startup_group)
-        layout.addSpacing(6)
-
-        # Save button
-        self._save_btn = make_button("Save Settings", accent=True, color=Ctp.GREEN)
-        self._save_btn.clicked.connect(self._save_settings)
-        layout.addWidget(self._save_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         layout.addStretch()
-
+        self._save_btn = make_button("Save Settings", accent=True, color=Ctp.BLUE)
+        self._save_btn.clicked.connect(self._save_settings)
+        layout.addWidget(self._save_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         return widget
 
-    # ── Status Handling ──────────────────────────────────────────────────
     def _refresh_status(self):
         def _worker():
             codex_status = self._auth.get_codex_status()
@@ -538,36 +448,30 @@ class SettingsWindow(QWidget):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_status_update(self, provider, status):
-        label = self._codex_status
-        dot = self._status_dot
-        login_btn = self._codex_login_btn
-        logout_btn = self._codex_logout_btn
-
         if status.authenticated:
-            text = "Authenticated"
+            text = "Connected"
             if status.email:
-                text += "\n{}".format(status.email)
+                text += " · {}".format(status.email)
             if status.message:
-                text += "\n{}".format(status.message)
-            label.setText(text)
-            label.setStyleSheet("color: {}; font-size: 13px;".format(Ctp.GREEN))
-            dot.setText(make_dot(Ctp.GREEN))
-            login_btn.setEnabled(False)
-            logout_btn.setEnabled(True)
+                text += " · {}".format(status.message)
+            self._codex_status.setText(text)
+            self._codex_status.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.GREEN))
+            self._status_dot.setText(make_dot(Ctp.GREEN))
+            self._codex_login_btn.setEnabled(False)
+            self._codex_logout_btn.setEnabled(True)
         else:
-            text = "Not Authenticated"
+            text = "Not connected"
             if status.message:
-                text += "\n{}".format(status.message)
-            label.setText(text)
-            label.setStyleSheet("color: {}; font-size: 13px;".format(Ctp.RED))
-            dot.setText(make_dot(Ctp.RED))
-            login_btn.setEnabled(True)
-            logout_btn.setEnabled(False)
+                text += " · {}".format(status.message)
+            self._codex_status.setText(text)
+            self._codex_status.setStyleSheet("color: {}; font-size: 11px;".format(Ctp.RED))
+            self._status_dot.setText(make_dot(Ctp.RED))
+            self._codex_login_btn.setEnabled(True)
+            self._codex_logout_btn.setEnabled(False)
 
-    # ── Login / Logout ───────────────────────────────────────────────────
     def _login_codex(self):
         self._codex_login_btn.setEnabled(False)
-        self._codex_login_btn.setText("Logging in...")
+        self._codex_login_btn.setText("Logging in…")
 
         def _worker():
             def callback(success, message):
@@ -579,7 +483,6 @@ class SettingsWindow(QWidget):
     def _on_login_result(self, provider, success, message):
         self._codex_login_btn.setText("Login")
         self._codex_login_btn.setEnabled(not success)
-
         if success:
             self._refresh_status()
             self._fetch_usage()
@@ -589,19 +492,15 @@ class SettingsWindow(QWidget):
     def _logout_codex(self):
         self._auth.logout_codex()
         self._refresh_status()
-        self._usage_container.setVisible(False)
-        self._usage_loading_label.setVisible(True)
-        self._usage_loading_label.setText("Not authenticated. Please log in.")
+        self._provider_header.setText("{}  Codex 1  11%".format(make_dot(Ctp.BLUE)))
+        self._updated_status.setText("{}  Sign in to refresh usage".format(make_dot(Ctp.SUBTEXT)))
 
-    # ── Usage Fetching ───────────────────────────────────────────────────
     def _fetch_usage(self):
         if self._usage_loading:
             return
         self._usage_loading = True
-        self._usage_loading_label.setVisible(True)
-        self._usage_loading_label.setText("Loading usage data...")
-        self._usage_container.setVisible(False)
         self._usage_refresh_btn.setEnabled(False)
+        self._updated_status.setText("{}  Refreshing usage…".format(make_dot(Ctp.BLUE)))
 
         def _worker():
             data = self._fetch_usage_direct()
@@ -645,58 +544,55 @@ class SettingsWindow(QWidget):
         except Exception as e:
             return {"error": "Failed: {}".format(e)}
 
+    def _reset_detail(self, reset_at):
+        if not reset_at:
+            return "Resets in: —"
+        reset_time = time.strftime("%I:%M %p", time.localtime(reset_at)).lstrip("0")
+        return "Resets in: {} at {}  |  On track".format(format_reset(reset_at), reset_time)
+
+    def _update_usage_card(self, percent_label, progress, detail, delta, micro, used, reset_at):
+        used = float(used or 0)
+        percent_label.setText("{:.0f}%".format(used))
+        progress.setValue(round(used))
+        self._set_progress_style(progress, used)
+        detail.setText(self._reset_detail(reset_at))
+        state_color = Ctp.GREEN if used < 80 else (Ctp.AMBER if used < 95 else Ctp.RED)
+        delta.setStyleSheet("color: {}; font-family: 'Aptos Display'; font-size: 10px; font-weight: 700;".format(state_color))
+        delta.setText("▼4%")
+        micro.setText(make_bar(used, 12))
+
     def _on_usage_update(self, data):
         self._usage_loading = False
         self._usage_refresh_btn.setEnabled(True)
-
         if not data or "error" in data:
-            self._usage_loading_label.setText(data.get("error", "Unknown error"))
-            self._usage_loading_label.setStyleSheet("color: {}; padding: 12px;".format(Ctp.RED))
+            message = data.get("error", "Unknown error") if data else "Unknown error"
+            self._updated_status.setText("{}  {}".format(make_dot(Ctp.RED), message))
             return
-
-        self._usage_loading_label.setVisible(False)
-        self._usage_container.setVisible(True)
 
         rl = data.get("rate_limit", {})
         primary = rl.get("primary_window", {})
         secondary = rl.get("secondary_window", {})
         credits = data.get("rate_limit_reset_credits", {})
-        plan = data.get("plan_type", "unknown")
-
-        # 5-hour window (primary)
+        plan = data.get("plan_type", "codex")
         p_used = primary.get("used_percent", 0)
-        p_reset = primary.get("reset_at", 0)
-        self._usage_5h_title.setText("Hourly Window  {}".format(make_dot(
-            Ctp.GREEN if p_used < 80 else (Ctp.PEACH if p_used < 95 else Ctp.RED)
-        )))
-        self._usage_5h_bar_label.setText("{}  {}%".format(make_bar(p_used), p_used))
-        self._usage_5h_detail.setText("Resets in: {}   |   Used: {}%".format(
-            format_reset(p_reset), p_used
-        ))
-
-        # 7-day window (secondary)
         s_used = secondary.get("used_percent", 0)
-        s_reset = secondary.get("reset_at", 0)
-        self._usage_7d_title.setText("Weekly Window  {}".format(make_dot(
-            Ctp.GREEN if s_used < 80 else (Ctp.PEACH if s_used < 95 else Ctp.RED)
-        )))
-        self._usage_7d_bar_label.setText("{}  {}%".format(make_bar(s_used), s_used))
-        self._usage_7d_detail.setText("Resets in: {}   |   Used: {}%".format(
-            format_reset(s_reset), s_used
+
+        self._provider_header.setText("{}  Codex 1  {:.0f}%".format(make_dot(Ctp.BLUE), float(p_used or 0)))
+        self._plan_badge.setText(str(plan).upper())
+        self._model_summary.setText("Codex · {} reset credit{}".format(
+            credits.get("available_count", 0),
+            "s" if credits.get("available_count", 0) != 1 else "",
         ))
-
-        # Reset credits
-        avail = credits.get("available_count", 0)
-        self._usage_credits_label.setText(
-            '{} Reset Credits: <span style="color:{}; font-weight:600;">{}</span>'.format(
-                make_dot(Ctp.LAVENDER), Ctp.LAVENDER if avail > 0 else Ctp.RED, avail
-            )
+        self._update_usage_card(
+            self._usage_5h_percent, self._usage_5h_bar, self._usage_5h_detail,
+            self._usage_5h_delta, self._usage_5h_micro, p_used, primary.get("reset_at", 0),
         )
+        self._update_usage_card(
+            self._usage_7d_percent, self._usage_7d_bar, self._usage_7d_detail,
+            self._usage_7d_delta, self._usage_7d_micro, s_used, secondary.get("reset_at", 0),
+        )
+        self._updated_status.setText("{}  Updated just now".format(make_dot(Ctp.GREEN)))
 
-        # Plan badge
-        self._plan_badge.setText("Plan: {}".format(plan.upper()))
-
-    # ── Save Settings ────────────────────────────────────────────────────
     def _save_settings(self):
         try:
             self._config.refresh_interval_seconds = self._refresh_spin.value()
@@ -707,23 +603,19 @@ class SettingsWindow(QWidget):
             self._config.codex_enabled = self._codex_check.isChecked()
             save_config(self._config)
 
-            autostart = self._autostart_check.isChecked()
-            self._set_auto_start(autostart)
+            self._set_auto_start(self._autostart_check.isChecked())
             Logger.info("settings", "Settings saved successfully")
-
-            # Brief visual feedback
-            orig_text = self._save_btn.text()
-            self._save_btn.setText("Saved!")
+            original_text = self._save_btn.text()
+            self._save_btn.setText("Saved")
             self._save_btn.setEnabled(False)
             QTimer.singleShot(1200, lambda: (
-                self._save_btn.setText(orig_text),
-                self._save_btn.setEnabled(True)
+                self._save_btn.setText(original_text),
+                self._save_btn.setEnabled(True),
             ))
         except Exception as e:
             Logger.error("settings", "Failed to save settings: {}".format(e))
 
 
-# ── Entry Points ─────────────────────────────────────────────────────────────
 def show_settings(auth_manager: AuthManager, config: AppConfig):
     app = QApplication.instance()
     if app is None:
