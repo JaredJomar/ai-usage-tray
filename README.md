@@ -28,17 +28,11 @@ Resets: 0
 
 ## Quick Start
 
-### Run from Python
-
 ```bash
 cd python
 pip install -r requirements.txt
 python main.py
 ```
-
-### Run the .exe
-
-Download `AIUsageTray.exe` from the Programs folder and double-click. No Python required.
 
 ## Authentication
 
