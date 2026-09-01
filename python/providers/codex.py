@@ -15,7 +15,7 @@ class CodexProvider:
         self._cache = cache
 
     def fetch(self) -> Optional[dict]:
-        cached = self._cache.get("codex")
+        cached = self._cache.get_cached("codex")
         if cached is not None:
             return cached
 
@@ -55,7 +55,7 @@ class CodexProvider:
             data = resp.json()
             usage = self._parse_usage(data)
             if usage:
-                self._cache.set("codex", usage)
+                self._cache.save("codex", usage)
             return usage
 
         except Exception as e:
