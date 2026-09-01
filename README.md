@@ -6,7 +6,7 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 
 - **System tray icon** that changes color based on usage:
   - 🟢 Green: 0–59%
-  - 🟠 Amber: 60–84%
+  - 🟠 Orange: 60–84%
   - 🔴 Red: 85%+
 - **Tooltip with progress bars** using Unicode `▰▱` characters
 - **Browser-based OAuth** — PKCE flow matching Codex CLI (no device codes)
