@@ -144,27 +144,17 @@ class TrayManager:
         self._tray_icon.title = tooltip[:127]
     
     def _build_tooltip(self) -> str:
-        lines = ["Codex \u2014 AI Usage", "\u2500" * 18]
-
-        if self._codex_data:
-            bar5 = self._get_progress_bar(self._codex_data["five_hour"])
-            reset5 = self._format_countdown(self._codex_data["five_hour_reset"])
-            lines.append("5h   {} {:>3}%  \u21bb {}".format(
-                bar5, int(self._codex_data["five_hour"]), reset5))
-
-            bar7 = self._get_progress_bar(self._codex_data["seven_day"])
-            reset7 = self._format_countdown(self._codex_data["seven_day_reset"])
-            lines.append("7d   {} {:>3}%  \u21bb {}".format(
-                bar7, int(self._codex_data["seven_day"]), reset7))
-
-            credits = self._codex_data.get("reset_credits", 0)
-            lines.append("Resets: {}".format(credits))
-
         if not self._codex_data:
-            lines.append("No data available")
-            lines.append("Right-click \u2192 Login to Codex")
+            return "Codex \u2014 No data\nRight-click \u2192 Login"
 
-        return "\n".join(lines)
+        h5 = int(self._codex_data["five_hour"])
+        h7 = int(self._codex_data["seven_day"])
+        r5 = self._format_countdown(self._codex_data["five_hour_reset"])
+        r7 = self._format_countdown(self._codex_data["seven_day_reset"])
+        credits = self._codex_data.get("reset_credits", 0)
+
+        return "Codex \u2014 {}% 5h ({}\u21bb)\nWeekly {}% ({}\u21bb)\nResets: {}".format(
+            h5, r5, h7, r7, credits)
     
     def _get_progress_bar(self, percentage: float) -> str:
         filled = int(percentage / 100.0 * 6)
@@ -172,12 +162,15 @@ class TrayManager:
         empty = 6 - filled
         return "▰" * filled + "▱" * empty
     
-    def _format_countdown(self, iso_timestamp: str) -> str:
-        if not iso_timestamp or iso_timestamp == "null":
-            return "—"
-        
+    def _format_countdown(self, timestamp) -> str:
+        if not timestamp:
+            return "\u2014"
+
         try:
-            reset_time = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+            if isinstance(timestamp, str):
+                reset_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                reset_time = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
             now = datetime.now(timezone.utc)
             diff = reset_time - now
             
