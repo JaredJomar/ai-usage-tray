@@ -1,7 +1,9 @@
 """
 System tray manager with Omarchy-style UI
 """
+import ctypes
 import sys
+import subprocess
 import threading
 import time
 import webbrowser
@@ -76,9 +78,11 @@ class TrayManager:
         icon = self._create_icon((68, 255, 68))
         auto_start_checked = self._is_auto_start_enabled()
         menu = pystray.Menu(
+            pystray.MenuItem("Show Dashboard", self._on_show_dashboard, default=True),
             pystray.MenuItem("Refresh Now", self._on_refresh),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Login to Codex", self._on_login_codex),
+            pystray.MenuItem("Settings", self._on_show_settings),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Launch on Startup",
@@ -145,7 +149,7 @@ class TrayManager:
     
     def _build_tooltip(self) -> str:
         if not self._codex_data:
-            return "Codex \u2014 No data\nRight-click \u2192 Login"
+            return "Codex Usage\nNo data\nRight-click > Login"
 
         h5 = int(self._codex_data["five_hour"])
         h7 = int(self._codex_data["seven_day"])
@@ -153,18 +157,28 @@ class TrayManager:
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
         credits = self._codex_data.get("reset_credits", 0)
 
-        return "Codex \u2014 {}% 5h ({}\u21bb)\nWeekly {}% ({}\u21bb)\nResets: {}".format(
-            h5, r5, h7, r7, credits)
-    
+        return "CODEX USAGE\n{}\n{}\nCREDITS: {}".format(
+            self._format_usage_row("5h", h5, r5),
+            self._format_usage_row("7d", h7, r7),
+            credits,
+        )
+
+    def _format_usage_row(self, period: str, percentage: int, reset: str) -> str:
+        return "{:<2} | [{}] | {:>3}% | reset {}".format(
+            period,
+            self._get_progress_bar(percentage),
+            percentage,
+            reset,
+        )
+
     def _get_progress_bar(self, percentage: float) -> str:
         filled = int(percentage / 100.0 * 6)
         filled = max(0, min(6, filled))
-        empty = 6 - filled
-        return "▰" * filled + "▱" * empty
+        return "#" * filled + "-" * (6 - filled)
     
     def _format_countdown(self, timestamp) -> str:
         if not timestamp:
-            return "\u2014"
+            return "-"
 
         try:
             if isinstance(timestamp, str):
@@ -189,8 +203,8 @@ class TrayManager:
                 return "{}m".format(minutes)
             else:
                 return "< 1m"
-        except Exception:
-            return "—"
+        except (TypeError, ValueError, OSError, OverflowError):
+            return "-"
     
     def _get_max_usage(self) -> float:
         max_usage = 0.0
@@ -254,6 +268,43 @@ class TrayManager:
     
     def _on_refresh(self, icon, item):
         threading.Thread(target=self._refresh_usage, daemon=True).start()
+
+    def _launch_window(self, argument: str):
+        extra_arguments = []
+        if argument == "--dashboard":
+            cursor_position = self._get_cursor_position()
+            if cursor_position:
+                extra_arguments = [
+                    "--dashboard-x={}".format(cursor_position[0]),
+                    "--dashboard-y={}".format(cursor_position[1]),
+                ]
+        if getattr(sys, "frozen", False):
+            command = [sys.executable, argument, *extra_arguments]
+        else:
+            command = [sys.executable, str(Path(__file__).parent / "main.py"), argument, *extra_arguments]
+        try:
+            subprocess.Popen(command)
+        except OSError as error:
+            Logger.error("tray", "Failed to open window: {}".format(error))
+
+    @staticmethod
+    def _get_cursor_position() -> Optional[tuple[int, int]]:
+        class Point(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        point = Point()
+        try:
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                return point.x, point.y
+        except (AttributeError, OSError) as error:
+            Logger.warn("tray", "Could not read cursor position: {}".format(error))
+        return None
+
+    def _on_show_dashboard(self, icon, item):
+        self._launch_window("--dashboard")
+
+    def _on_show_settings(self, icon, item):
+        self._launch_window("--settings")
     
     def _on_login_codex(self, icon, item):
         def on_result(success, message):
@@ -268,7 +319,6 @@ class TrayManager:
         self._set_auto_start(not current)
 
     def _on_open_log_folder(self, icon, item):
-        import subprocess
         log_dir = Path.home() / "AppData" / "Local" / "AI-Usage-Tray" / "logs"
         if log_dir.exists():
             subprocess.Popen(["explorer", str(log_dir)])

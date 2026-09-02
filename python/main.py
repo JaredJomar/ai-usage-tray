@@ -20,6 +20,17 @@ def main():
     # Load config
     config = load_config()
     Logger.info("main", f"Config loaded: refresh={config.refresh_interval_seconds}s, cache_ttl={config.cache_ttl_seconds}s")
+
+    if "--dashboard" in sys.argv:
+        from dashboard import parse_dashboard_anchor, show_dashboard
+        show_dashboard(config, parse_dashboard_anchor(sys.argv[1:]))
+        return
+
+    if "--settings" in sys.argv:
+        from auth import AuthManager
+        from settings_window import show_settings
+        show_settings(AuthManager(), config)
+        return
     
     # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
