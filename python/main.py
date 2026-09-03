@@ -3,6 +3,8 @@ AI Usage Tray - Windows tray app for monitoring Codex usage
 """
 import sys
 import signal
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 
 # Add current directory to path
@@ -11,6 +13,28 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import load_config
 from tray import TrayManager
 from logger import Logger
+
+
+_instance_mutex = None
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, ctypes.c_wchar_p]
+_kernel32.CreateMutexW.restype = ctypes.c_void_p
+_kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+_kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def acquire_single_instance() -> bool:
+    global _instance_mutex
+    _instance_mutex = _kernel32.CreateMutexW(None, False, "AIUsageTray.SingleInstance")
+    last_error = ctypes.get_last_error()
+    if not _instance_mutex:
+        Logger.error("main", f"Could not create single-instance mutex (Windows error {last_error})")
+        return False
+    if last_error == 183:
+        _kernel32.CloseHandle(_instance_mutex)
+        _instance_mutex = None
+        return False
+    return True
 
 
 def main():
@@ -30,6 +54,10 @@ def main():
         from auth import AuthManager
         from settings_window import show_settings
         show_settings(AuthManager(), config)
+        return
+
+    if not acquire_single_instance():
+        Logger.info("main", "AI Usage Tray is already running")
         return
     
     # Handle Ctrl+C gracefully
