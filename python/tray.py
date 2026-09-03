@@ -157,7 +157,7 @@ class TrayManager:
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
         credits = self._codex_data.get("reset_credits", 0)
 
-        return "CODEX USAGE\n{}\n{}\nCREDITS: {}".format(
+        return "CODEX USAGE\n{}\n{}\nRESETS: {}".format(
             self._format_usage_row("5h", h5, r5),
             self._format_usage_row("7d", h7, r7),
             credits,
