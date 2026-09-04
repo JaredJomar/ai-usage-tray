@@ -34,6 +34,7 @@ class DashboardState:
     seven_day_reset: str
     plan: str
     credits: str
+    credit_expiry: str
     last_update: str
     sessions_24h: str
     sessions_7d: str
@@ -152,6 +153,20 @@ def _format_tokens(value: Optional[int]) -> str:
     return "{:,}".format(value)
 
 
+def _nearest_credit_expiry(api_data: dict) -> Optional[object]:
+    direct_expiry = api_data.get("reset_credits_expires_at")
+    if direct_expiry:
+        return direct_expiry
+    entries = api_data.get("reset_credit_expiries")
+    if not isinstance(entries, list):
+        return None
+    expiry_values = []
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("expires_at"):
+            expiry_values.append(entry["expires_at"])
+    return min(expiry_values) if expiry_values else None
+
+
 def _format_usage(value: object) -> str:
     try:
         return "{:.0f}%".format(float(value))
@@ -183,6 +198,7 @@ def build_dashboard_state(
         seven_day_reset=_format_countdown(api_data.get("seven_day_reset"), now),
         plan=str(plan),
         credits=str(credits) if credits is not None else "Not available",
+        credit_expiry=_format_countdown(_nearest_credit_expiry(api_data), now),
         last_update=_format_timestamp(local.last_updated_at),
         sessions_24h=str(local.sessions_last_24h),
         sessions_7d=str(local.sessions_last_7d),
@@ -383,8 +399,10 @@ class DashboardWindow(QWidget):
         layout.setSpacing(DashboardTheme.SPACE_1)
         self._plan = QLabel("Plan: Not available", objectName="metricValue")
         self._credits = QLabel("Reset credits: Not available", objectName="muted")
+        self._credit_expiry = QLabel("Next reset credit expiry: Not available", objectName="muted")
         layout.addWidget(self._plan)
         layout.addWidget(self._credits)
+        layout.addWidget(self._credit_expiry)
         return frame
 
     def _make_metric(self, layout: QGridLayout, column: int, title: str) -> QLabel:
@@ -424,6 +442,7 @@ class DashboardWindow(QWidget):
         self._weekly_card[2].setText("Resets: {}".format(state.seven_day_reset))
         self._plan.setText("Plan: {}".format(state.plan))
         self._credits.setText("Reset credits: {}".format(state.credits))
+        self._credit_expiry.setText("Next reset credit expiry: {}".format(state.credit_expiry))
         self._sessions_24h.setText(state.sessions_24h)
         self._sessions_7d.setText(state.sessions_7d)
         self._total_sessions.setText(state.total_sessions)

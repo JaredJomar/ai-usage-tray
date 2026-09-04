@@ -18,7 +18,7 @@ from urllib.parse import urlencode, urlparse, parse_qs
 
 import requests
 
-from config import get_codex_auth_path
+from config import get_ca_bundle_path, get_codex_auth_path
 from logger import Logger
 
 
@@ -128,6 +128,7 @@ class AuthManager:
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30,
+                verify=get_ca_bundle_path() or True,
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -201,6 +202,7 @@ class AuthManager:
                 "https://chatgpt.com/backend-api/wham/usage",
                 headers=headers,
                 timeout=10,
+                verify=get_ca_bundle_path() or True,
             )
             if resp.status_code == 200:
                 return AuthStatus("codex", True,
@@ -314,6 +316,7 @@ class AuthManager:
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30,
+                verify=get_ca_bundle_path() or True,
             )
             if resp.status_code == 200:
                 return resp.json()

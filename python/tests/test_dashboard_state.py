@@ -15,6 +15,7 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(state.seven_day, "Not available")
         self.assertEqual(state.plan, "Not available")
         self.assertEqual(state.credits, "Not available")
+        self.assertEqual(state.credit_expiry, "Not available")
         self.assertEqual(state.tokens, "Not available")
 
     def test_api_limits_and_local_metadata_render_without_estimates(self):
@@ -34,6 +35,7 @@ class DashboardStateTests(unittest.TestCase):
                 "seven_day_reset": "2026-09-04T12:00:00Z",
                 "plan_type": "pro",
                 "reset_credits": 3,
+                "reset_credits_expires_at": "2026-09-01T13:00:00Z",
             },
             local,
             datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
@@ -42,6 +44,7 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(state.five_hour, "25%")
         self.assertEqual(state.five_hour_reset, "2h 30m")
         self.assertEqual(state.seven_day, "70%")
+        self.assertEqual(state.credit_expiry, "1h 0m")
         self.assertEqual(state.tokens, "1,200")
         self.assertEqual(state.model_rows, (("gpt-5", "4 sessions"),))
 
