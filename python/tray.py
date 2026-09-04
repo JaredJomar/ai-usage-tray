@@ -33,6 +33,8 @@ class TrayManager:
         
         self._codex_data: Optional[dict] = None
         self._last_notify_time = datetime.min
+        self._credit_alerts_sent: set[tuple[str, str, int]] = set()
+        self._credit_alert_lock = threading.Lock()
         
         self._tray_icon: Optional[pystray.Icon] = None
         self._running = False
@@ -156,11 +158,15 @@ class TrayManager:
         r5 = self._format_countdown(self._codex_data["five_hour_reset"])
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
         credits = self._codex_data.get("reset_credits", 0)
+        nearest_credit_expiry = self._nearest_credit_expiry()
+        credit_summary = "RESETS: {}".format(credits)
+        if nearest_credit_expiry:
+            credit_summary += " | expires {}".format(self._format_countdown(nearest_credit_expiry))
 
-        return "CODEX USAGE\n{}\n{}\nRESETS: {}".format(
+        return "CODEX USAGE\n{}\n{}\n{}".format(
             self._format_usage_row("5h", h5, r5),
             self._format_usage_row("7d", h7, r7),
-            credits,
+            credit_summary,
         )
 
     def _format_usage_row(self, period: str, percentage: int, reset: str) -> str:
@@ -177,34 +183,76 @@ class TrayManager:
         return "#" * filled + "-" * (6 - filled)
     
     def _format_countdown(self, timestamp) -> str:
-        if not timestamp:
+        reset_time = self._parse_timestamp(timestamp)
+        if reset_time is None:
             return "-"
+        diff = reset_time - datetime.now(timezone.utc)
 
+        if diff.total_seconds() <= 0:
+            return "expired"
+
+        days = diff.days
+        hours = diff.seconds // 3600
+        minutes = (diff.seconds % 3600) // 60
+
+        if days > 0:
+            return "{}d {}h".format(days, hours)
+        if hours > 0:
+            return "{}h {}m".format(hours, minutes)
+        if minutes > 0:
+            return "{}m".format(minutes)
+        return "< 1m"
+
+    @staticmethod
+    def _parse_timestamp(value: object) -> Optional[datetime]:
         try:
-            if isinstance(timestamp, str):
-                reset_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            else:
-                reset_time = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
-            now = datetime.now(timezone.utc)
-            diff = reset_time - now
-            
-            if diff.total_seconds() <= 0:
-                return "expired"
-            
-            days = diff.days
-            hours = diff.seconds // 3600
-            minutes = (diff.seconds % 3600) // 60
-            
-            if days > 0:
-                return "{}d {}h".format(days, hours)
-            elif hours > 0:
-                return "{}h {}m".format(hours, minutes)
-            elif minutes > 0:
-                return "{}m".format(minutes)
-            else:
-                return "< 1m"
+            if isinstance(value, bool) or value is None:
+                return None
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    return None
+                try:
+                    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    value = float(value)
+                else:
+                    if timestamp.tzinfo is None:
+                        return timestamp.replace(tzinfo=timezone.utc)
+                    return timestamp.astimezone(timezone.utc)
+            if isinstance(value, (int, float)):
+                if abs(value) >= 100_000_000_000:
+                    value /= 1000
+                return datetime.fromtimestamp(value, tz=timezone.utc)
         except (TypeError, ValueError, OSError, OverflowError):
-            return "-"
+            return None
+        return None
+
+    def _credit_expiries(self) -> list[tuple[str, str, datetime]]:
+        if not self._codex_data:
+            return []
+        entries = self._codex_data.get("reset_credit_expiries", [])
+        if not isinstance(entries, list):
+            entries = []
+        if not entries and self._codex_data.get("reset_credits_expires_at"):
+            entries = [{"expires_at": self._codex_data["reset_credits_expires_at"]}]
+        valid_expiries = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                expiry_text = entry.get("expires_at")
+                credit_id = str(entry.get("id") or expiry_text)
+            else:
+                expiry_text = entry
+                credit_id = str(expiry_text)
+            expiry = self._parse_timestamp(expiry_text)
+            if expiry is None or expiry <= datetime.now(timezone.utc):
+                continue
+            valid_expiries.append((credit_id, str(expiry_text), expiry))
+        return sorted(valid_expiries, key=lambda entry: (entry[2], entry[0]))
+
+    def _nearest_credit_expiry(self) -> Optional[str]:
+        expiries = self._credit_expiries()
+        return expiries[0][1] if expiries else None
     
     def _get_max_usage(self) -> float:
         max_usage = 0.0
@@ -213,13 +261,15 @@ class TrayManager:
         return max_usage
     
     def _check_notifications(self):
+        if not self._codex_data:
+            return
+
+        self._check_reset_credit_notifications(datetime.now(timezone.utc))
+
         now = datetime.now()
         cooldown = timedelta(minutes=self._config.notify_cooldown_minutes)
         
         if now - self._last_notify_time < cooldown:
-            return
-        
-        if not self._codex_data:
             return
         
         usage = self._codex_data["five_hour"]
@@ -229,9 +279,61 @@ class TrayManager:
         elif usage >= self._config.notify_warn_threshold:
             self._send_notification("codex", usage, "normal")
             self._last_notify_time = now
-    
+
+    def _check_reset_credit_notifications(self, now: datetime) -> None:
+        with self._credit_alert_lock:
+            thresholds = (
+                self._config.reset_credit_notify_60_minutes,
+                self._config.reset_credit_notify_15_minutes,
+            )
+            expiries = self._credit_expiries()
+            active_credits = {(credit_id, expiry_text) for credit_id, expiry_text, _ in expiries}
+            self._credit_alerts_sent.intersection_update(
+                {key for key in self._credit_alerts_sent if key[:2] in active_credits},
+            )
+            for credit_id, expiry_text, expiry in expiries:
+                minutes_remaining = (expiry - now).total_seconds() / 60
+                if minutes_remaining <= 0:
+                    continue
+                threshold = thresholds[1] if minutes_remaining <= thresholds[1] else None
+                if threshold is None and minutes_remaining <= thresholds[0]:
+                    threshold = thresholds[0]
+                if threshold is None:
+                    continue
+                alert_key = (credit_id, expiry_text, threshold)
+                if alert_key in self._credit_alerts_sent:
+                    continue
+                self._send_credit_notification(threshold, minutes_remaining)
+                self._credit_alerts_sent.add(alert_key)
+
     def _send_notification(self, provider: str, usage: float, urgency: str):
         Logger.info("main", "ALERT: {} usage at {}% ({})".format(provider.upper(), int(usage), urgency))
+        self._send_native_notification(
+            "{} usage is at {}% ({})".format(provider.upper(), int(usage), urgency),
+            "AI Usage Tray",
+        )
+
+    def _send_credit_notification(self, threshold: int, minutes_remaining: float) -> None:
+        Logger.info("main", "ALERT: Codex reset credit expires within {} minutes".format(threshold))
+        self._send_native_notification(
+            "A reset credit expires in about {} minutes ({} minutes alert).".format(
+                max(1, int(minutes_remaining)), threshold,
+            ),
+            "Codex reset credit expiry",
+        )
+
+    def _send_native_notification(self, message: str, title: str) -> None:
+        supports_notifications = self._tray_icon is not None and (
+            getattr(self._tray_icon, "HAS_NOTIFICATION", False)
+            or getattr(pystray.Icon, "HAS_NOTIFICATION", False)
+        )
+        if not supports_notifications:
+            Logger.info("main", "Native notifications are unavailable; alert logged")
+            return
+        try:
+            self._tray_icon.notify(message, title)
+        except Exception as error:
+            Logger.warn("main", "Native notification failed: {}".format(error))
     
     def _create_icon(self, color: tuple) -> Image.Image:
         size = 64
