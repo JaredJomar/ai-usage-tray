@@ -2,6 +2,7 @@
 System tray manager with Omarchy-style UI
 """
 import ctypes
+import os
 import sys
 import subprocess
 import threading
@@ -35,6 +36,8 @@ class TrayManager:
         self._last_notify_time = datetime.min
         self._credit_alerts_sent: set[tuple[str, str, int]] = set()
         self._credit_alert_lock = threading.Lock()
+        self._window_launch_lock = threading.Lock()
+        self._last_dashboard_launch = 0.0
         
         self._tray_icon: Optional[pystray.Icon] = None
         self._running = False
@@ -372,39 +375,79 @@ class TrayManager:
         threading.Thread(target=self._refresh_usage, daemon=True).start()
 
     def _launch_window(self, argument: str):
-        extra_arguments = []
-        if argument == "--dashboard":
-            cursor_position = self._get_cursor_position()
-            if cursor_position:
-                extra_arguments = [
-                    "--dashboard-x={}".format(cursor_position[0]),
-                    "--dashboard-y={}".format(cursor_position[1]),
-                ]
-        if getattr(sys, "frozen", False):
-            command = [sys.executable, argument, *extra_arguments]
-        else:
-            command = [sys.executable, str(Path(__file__).parent / "main.py"), argument, *extra_arguments]
-        try:
-            process = subprocess.Popen(command)
+        with self._window_launch_lock:
+            now = time.monotonic()
+            if argument == "--dashboard" and now - self._last_dashboard_launch < 5:
+                Logger.info("tray", "Dashboard launch debounced")
+                return
             if argument == "--dashboard":
-                threading.Thread(
-                    target=self._retry_window_launch,
-                    args=(process, command),
-                    daemon=True,
-                ).start()
-        except OSError as error:
-            Logger.error("tray", "Failed to open window: {}".format(error))
+                self._last_dashboard_launch = now
+            extra_arguments = []
+            if argument == "--dashboard":
+                cursor_position = self._get_cursor_position()
+                if cursor_position:
+                    extra_arguments = [
+                        "--dashboard-x={}".format(cursor_position[0]),
+                        "--dashboard-y={}".format(cursor_position[1]),
+                    ]
+            if getattr(sys, "frozen", False):
+                command = [sys.executable, argument, *extra_arguments]
+            else:
+                command = [sys.executable, str(Path(__file__).parent / "main.py"), argument, *extra_arguments]
+            try:
+                child_log = self._open_child_log() if argument == "--dashboard" else None
+                process = subprocess.Popen(
+                    command,
+                    stderr=child_log,
+                    stdout=subprocess.DEVNULL if child_log is not None else None,
+                    env=self._child_environment(),
+                )
+                if argument == "--dashboard":
+                    threading.Thread(
+                        target=self._retry_window_launch,
+                        args=(process, command),
+                        daemon=True,
+                    ).start()
+            except OSError as error:
+                Logger.error("tray", "Failed to open window: {}".format(error))
+
+    @staticmethod
+    def _child_environment() -> dict[str, str]:
+        environment = os.environ.copy()
+        environment.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+        return environment
+
+    @staticmethod
+    def _open_child_log():
+        try:
+            log_dir = Path.home() / "AppData" / "Local" / "AI-Usage-Tray" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            return open(log_dir / "dashboard-child.log", "ab")
+        except OSError:
+            return None
 
     @staticmethod
     def _retry_window_launch(process, command: list[str]) -> None:
-        time.sleep(1)
-        if process.poll() is None:
-            return
-        Logger.warn("tray", "Dashboard exited during startup; retrying once")
-        try:
-            subprocess.Popen(command)
-        except OSError as error:
-            Logger.error("tray", "Dashboard retry failed: {}".format(error))
+        for delay in (2, 5, 10):
+            time.sleep(delay)
+            if process.poll() is None:
+                return
+            if process.poll() == 0:
+                return
+            Logger.warn("tray", "Dashboard exited during startup; retrying")
+            try:
+                child_log = TrayManager._open_child_log()
+                process = subprocess.Popen(
+                    command,
+                    stderr=child_log,
+                    stdout=subprocess.DEVNULL if child_log is not None else None,
+                    env=TrayManager._child_environment(),
+                )
+            except OSError as error:
+                Logger.error("tray", "Dashboard retry failed: {}".format(error))
+                return
+        if process.poll() not in (None, 0):
+            Logger.error("tray", "Dashboard failed to start after retries; see dashboard-child.log")
 
     @staticmethod
     def _get_cursor_position() -> Optional[tuple[int, int]]:

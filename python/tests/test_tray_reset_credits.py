@@ -75,14 +75,86 @@ def test_tooltip_includes_reset_count_and_nearest_credit_expiry():
     assert "expires" in tooltip
 
 
-def test_dashboard_launch_retries_if_child_exits_during_startup(monkeypatch):
+class FakeChild:
+    def __init__(self, exit_code=None):
+        self._exit_code = exit_code
+
+    def poll(self):
+        return self._exit_code
+
+
+def test_dashboard_launch_retries_with_backoff_until_healthy(monkeypatch):
     manager = TrayManager.__new__(TrayManager)
-    child = type("Child", (), {"poll": lambda self: 1})()
+    launches = []
+
+    def fake_popen(command, **kwargs):
+        launches.append(command)
+        return FakeChild(exit_code=None)
+
+    monkeypatch.setattr(tray_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(tray_module.subprocess, "Popen", fake_popen)
+
+    manager._retry_window_launch(FakeChild(exit_code=1), ["AIUsageTray.exe", "--dashboard"])
+
+    assert launches == [["AIUsageTray.exe", "--dashboard"]]
+
+
+def test_dashboard_launch_gives_up_after_repeated_startup_failures(monkeypatch):
+    manager = TrayManager.__new__(TrayManager)
+    launches = []
+    sleeps = []
+
+    def fake_popen(command, **kwargs):
+        launches.append(command)
+        return FakeChild(exit_code=1)
+
+    monkeypatch.setattr(tray_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(tray_module.subprocess, "Popen", fake_popen)
+
+    manager._retry_window_launch(FakeChild(exit_code=1), ["AIUsageTray.exe", "--dashboard"])
+
+    assert launches == [["AIUsageTray.exe", "--dashboard"]] * 3
+    assert sleeps == [2, 5, 10]
+
+
+def test_dashboard_launch_ignores_clean_exit(monkeypatch):
+    manager = TrayManager.__new__(TrayManager)
     launches = []
 
     monkeypatch.setattr(tray_module.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(tray_module.subprocess, "Popen", lambda command: launches.append(command))
+    monkeypatch.setattr(
+        tray_module.subprocess, "Popen", lambda command, **kwargs: launches.append(command)
+    )
 
-    manager._retry_window_launch(child, ["AIUsageTray.exe", "--dashboard"])
+    manager._retry_window_launch(FakeChild(exit_code=0), ["AIUsageTray.exe", "--dashboard"])
 
-    assert launches == [["AIUsageTray.exe", "--dashboard"]]
+    assert launches == []
+
+
+def test_dashboard_launch_is_debounced(monkeypatch):
+    manager = TrayManager.__new__(TrayManager)
+    manager._window_launch_lock = threading.Lock()
+    manager._last_dashboard_launch = 0.0
+    launches = []
+
+    monkeypatch.setattr(tray_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        tray_module.subprocess, "Popen", lambda command, **kwargs: launches.append(command) or FakeChild()
+    )
+    monkeypatch.setattr(TrayManager, "_open_child_log", staticmethod(lambda: None))
+    monkeypatch.setattr(TrayManager, "_get_cursor_position", staticmethod(lambda: None))
+
+    manager._launch_window("--dashboard")
+    manager._launch_window("--dashboard")
+
+    assert len(launches) == 1
+
+
+def test_dashboard_child_environment_keeps_the_existing_pyinstaller_home(monkeypatch):
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "C:\\Temp\\_MEI123")
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+
+    environment = TrayManager._child_environment()
+
+    assert environment["_PYI_APPLICATION_HOME_DIR"] == "C:\\Temp\\_MEI123"
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in environment

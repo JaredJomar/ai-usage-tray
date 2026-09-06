@@ -1,6 +1,7 @@
 """
 AI Usage Tray - Windows tray app for monitoring Codex usage
 """
+import os
 import sys
 import signal
 import ctypes
@@ -40,7 +41,8 @@ def acquire_single_instance() -> bool:
 def main():
     """Main entry point"""
     Logger.info("main", "Starting AI Usage Tray...")
-    
+    Logger.info("main", "Process started: pid={} argv={}".format(os.getpid(), sys.argv))
+
     # Load config
     config = load_config()
     Logger.info("main", f"Config loaded: refresh={config.refresh_interval_seconds}s, cache_ttl={config.cache_ttl_seconds}s")
@@ -57,8 +59,9 @@ def main():
         return
 
     if not acquire_single_instance():
-        Logger.info("main", "AI Usage Tray is already running")
+        Logger.info("main", "AI Usage Tray is already running (pid={})".format(os.getpid()))
         return
+    Logger.info("main", "Single-instance lock acquired (pid={})".format(os.getpid()))
     
     # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
