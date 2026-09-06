@@ -36,7 +36,7 @@ before the nearest available credit expires.
 ```text
 ┌────────────────────────────────────────────┐
 │ CODEX • LIVE LIMITS    Usage dashboard  X  │
-│ Current limits loaded                 Refresh│
+│ Current limits loaded               Refresh│
 │                                            │
 │ 5-HOUR WINDOW       86%   WEEKLY WINDOW 34%│
 │ Resets: 3h 8m             Resets: 5d 1h    │
@@ -46,7 +46,7 @@ before the nearest available credit expires.
 │ Next reset credit expiry: 42m              │
 │                                            │
 │ Local activity                             │
-│ LAST 24 HOURS  3  LAST 7 DAYS  12  ALL  48│
+│ LAST 24 HOURS  3  LAST 7 DAYS  12  ALL  48 │
 │ Usage history: collecting snapshots…       │
 │                                            │
 │ Tokens & models                            │
