@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import threading
 
+import tray as tray_module
 from config import AppConfig
 from tray import TrayManager
 
@@ -72,3 +73,16 @@ def test_tooltip_includes_reset_count_and_nearest_credit_expiry():
 
     assert "RESETS: 3" in tooltip
     assert "expires" in tooltip
+
+
+def test_dashboard_launch_retries_if_child_exits_during_startup(monkeypatch):
+    manager = TrayManager.__new__(TrayManager)
+    child = type("Child", (), {"poll": lambda self: 1})()
+    launches = []
+
+    monkeypatch.setattr(tray_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(tray_module.subprocess, "Popen", lambda command: launches.append(command))
+
+    manager._retry_window_launch(child, ["AIUsageTray.exe", "--dashboard"])
+
+    assert launches == [["AIUsageTray.exe", "--dashboard"]]

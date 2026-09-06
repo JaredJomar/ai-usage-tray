@@ -385,9 +385,26 @@ class TrayManager:
         else:
             command = [sys.executable, str(Path(__file__).parent / "main.py"), argument, *extra_arguments]
         try:
-            subprocess.Popen(command)
+            process = subprocess.Popen(command)
+            if argument == "--dashboard":
+                threading.Thread(
+                    target=self._retry_window_launch,
+                    args=(process, command),
+                    daemon=True,
+                ).start()
         except OSError as error:
             Logger.error("tray", "Failed to open window: {}".format(error))
+
+    @staticmethod
+    def _retry_window_launch(process, command: list[str]) -> None:
+        time.sleep(1)
+        if process.poll() is None:
+            return
+        Logger.warn("tray", "Dashboard exited during startup; retrying once")
+        try:
+            subprocess.Popen(command)
+        except OSError as error:
+            Logger.error("tray", "Dashboard retry failed: {}".format(error))
 
     @staticmethod
     def _get_cursor_position() -> Optional[tuple[int, int]]:
