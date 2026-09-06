@@ -8,7 +8,7 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
   - 🟢 Green: 0–59%
   - 🟠 Orange: 60–84%
   - 🔴 Red: 85%+
-- **Tooltip with progress bars** using Unicode `▰▱` characters
+- **Tooltip with compact progress bars** and reset countdowns
 - **Browser-based OAuth** — PKCE flow matching Codex CLI (no device codes)
 - **Live usage display** in settings window (5h hourly + 7d weekly windows)
 - **Reset credits** counter with countdown timers
@@ -16,15 +16,47 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 - **Catppuccin Mocha** themed settings window with PyQt6
 - **Standalone .exe** — no Python installation required
 
-## Screenshot
+## Screenshots
+
+### Tray tooltip
 
 ```
-Codex — AI Usage
-─────────────────
-5h   ▰▱▱▱▱▱   1%  ↻ 1h 51m
-7d   ▰▱▱▱▱▱   0%  ↻ 6d 21h
-Resets: 0
+CODEX USAGE
+5h | [#####-] |  86% | reset 3h 8m
+7d | [##----] |  34% | reset 5d 1h
+RESETS: 1 | expires 42m
 ```
+
+The tray icon is green below 60%, orange from 60% through 84%, and red at
+85% or higher. Reset-credit notifications appear one hour and fifteen minutes
+before the nearest available credit expires.
+
+### Dashboard
+
+```text
+┌────────────────────────────────────────────┐
+│ CODEX • LIVE LIMITS    Usage dashboard  X  │
+│ Current limits loaded                 Refresh│
+│                                            │
+│ 5-HOUR WINDOW       86%   WEEKLY WINDOW 34%│
+│ Resets: 3h 8m             Resets: 5d 1h    │
+│                                            │
+│ Plan: ChatGPT Plus                         │
+│ Reset credits: 1                           │
+│ Next reset credit expiry: 42m              │
+│                                            │
+│ Local activity                             │
+│ LAST 24 HOURS  3  LAST 7 DAYS  12  ALL  48│
+│ Usage history: collecting snapshots…       │
+│                                            │
+│ Tokens & models                            │
+│ Tokens used (local aggregate): 12,345      │
+└────────────────────────────────────────────┘
+```
+
+The dashboard opens from the tray icon and includes live limit cards, reset
+credit details, local session activity, usage history, and locally observed
+token/model metadata when available.
 
 ## Quick Start
 
@@ -62,6 +94,8 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   "notify_warn_threshold": 80,
   "notify_critical_threshold": 95,
   "notify_cooldown_minutes": 15,
+  "reset_credit_notify_60_minutes": 60,
+  "reset_credit_notify_15_minutes": 15,
   "codex_enabled": true,
   "launch_on_startup": false,
   "display_mode": "icon"
@@ -77,7 +111,13 @@ Authorization: Bearer {access_token}
 User-Agent: codex_cli_rs
 ```
 
-Response includes `rate_limit.primary_window` (5h), `rate_limit.secondary_window` (7d), `rate_limit_reset_credits`, and `plan_type`.
+Response includes `rate_limit.primary_window` (5h), `rate_limit.secondary_window` (7d),
+`rate_limit_reset_credits`, and `plan_type`. Available reset-credit expiry details
+are fetched from:
+```
+GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits
+Authorization: Bearer {access_token}
+```
 
 ## Architecture
 
