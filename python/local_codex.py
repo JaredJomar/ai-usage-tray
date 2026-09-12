@@ -40,6 +40,8 @@ class LocalCodexSnapshot:
     sessions_last_7d: int = 0
     tokens_used: Optional[int] = None
     model_breakdown: dict[str, int] = field(default_factory=dict)
+    model_last_updated_at: dict[str, str] = field(default_factory=dict)
+    model_tokens_used: dict[str, int] = field(default_factory=dict)
     last_updated_at: Optional[str] = None
     observed_primary: Optional[RolloutWindow] = None
     observed_secondary: Optional[RolloutWindow] = None
@@ -154,6 +156,31 @@ def _iter_rollout_events(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
             continue
 
 
+def _resolve_rollout_path(rollout_path: Any, codex_dir: Path) -> Optional[Path]:
+    """Resolve a rollout_path to a path under codex_dir, or return None if invalid.
+
+    Accepts absolute or codex-dir-relative paths. Rejects missing, empty,
+    outside, or symlink-escaping paths. Does not read rollout contents.
+    """
+    if not isinstance(rollout_path, str) or not rollout_path.strip():
+        return None
+    try:
+        candidate = Path(rollout_path)
+        if not candidate.is_absolute():
+            candidate = (codex_dir / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        codex_dir_resolved = codex_dir.resolve()
+        # Ensure the resolved path is under codex_dir (no directory traversal)
+        candidate.relative_to(codex_dir_resolved)
+        # Path must exist as a file
+        if not candidate.is_file():
+            return None
+        return candidate
+    except (ValueError, OSError):
+        return None
+
+
 def _read_threads(database_path: Path) -> list[dict[str, Any]]:
     if not database_path.is_file():
         return []
@@ -181,32 +208,100 @@ def read_local_codex_snapshot(codex_dir: Optional[Path] = None, now: Optional[da
     Missing or newer Codex schemas result in empty/unavailable fields rather
     than failures. Local rate-limit values are observation metadata only; the
     dashboard must use the wham API for current usage.
+
+    Global activity (session_count, sessions_last_24h/7d, tokens_used) uses
+    rows with valid model, non-negative tokens_used, and parseable timestamp
+    (updated_at preferred, created_at fallback). Model aggregates
+    (model_breakdown, model_last_updated_at, model_tokens_used) additionally
+    require a non-empty rollout_path that resolves to an existing file under
+    codex_dir. NULL/missing rollout_path never populates model rows.
     """
     base_dir = codex_dir or CODEX_DIR
     reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     rows = _read_threads(base_dir / "state_5.sqlite")
 
-    timestamps = [_as_datetime(row.get("updated_at") or row.get("created_at")) for row in rows]
-    valid_timestamps = [timestamp for timestamp in timestamps if timestamp]
-    total_tokens = 0
-    has_tokens = False
-    models: Counter[str] = Counter()
+    # Per-model tracking (strict: requires valid rollout_path)
+    model_counts: Counter[str] = Counter()
+    model_latest_updated: dict[str, datetime] = {}
+    model_total_tokens: dict[str, int] = {}
+
+    # Global activity tracking (lenient: no rollout_path requirement)
+    activity_rows = 0
+    activity_total_tokens = 0
+    activity_has_tokens = False
+    activity_timestamps: list[datetime] = []
+
     for row in rows:
-        token_value = row.get("tokens_used")
-        if isinstance(token_value, (int, float)) and token_value >= 0:
-            total_tokens += int(token_value)
-            has_tokens = True
+        # Validate model
         model = row.get("model")
-        if isinstance(model, str) and model.strip():
-            models[model.strip()] += 1
+        if not isinstance(model, str) or not model.strip():
+            continue
+        model = model.strip()
+
+        # Validate tokens_used
+        token_value = row.get("tokens_used")
+        if not isinstance(token_value, (int, float)) or token_value < 0:
+            continue
+        token_value = int(token_value)
+
+        # Validate timestamp for activity: updated_at preferred, created_at fallback if updated_at unparseable
+        updated_at_raw = row.get("updated_at")
+        timestamp = _as_datetime(updated_at_raw)
+        if timestamp is None:
+            # Fallback to created_at if updated_at is missing or unparseable
+            created_at_raw = row.get("created_at")
+            timestamp = _as_datetime(created_at_raw)
+        if timestamp is None:
+            continue
+
+        # Row is valid for global activity aggregation
+        activity_rows += 1
+        activity_total_tokens += token_value
+        activity_has_tokens = True
+        activity_timestamps.append(timestamp)
+
+        # Strict validation for model aggregates: require valid rollout_path AND valid updated_at
+        rollout_path = row.get("rollout_path")
+        if rollout_path is not None:
+            resolved = _resolve_rollout_path(rollout_path, base_dir)
+            if resolved is not None:
+                # Row is valid for model aggregates only if updated_at is parseable
+                updated_at_ts = _as_datetime(updated_at_raw)
+                if updated_at_ts is not None:
+                    model_counts[model] += 1
+                    model_total_tokens[model] = model_total_tokens.get(model, 0) + token_value
+                    # Track latest updated_at per model (use updated_at only, no created_at fallback)
+                    if model not in model_latest_updated or updated_at_ts > model_latest_updated[model]:
+                        model_latest_updated[model] = updated_at_ts
+
+    # Order models by latest updated_at descending, then by model name for deterministic tie-break
+    ordered_models = sorted(
+        model_counts.keys(),
+        key=lambda m: (-model_latest_updated[m].timestamp(), m) if m in model_latest_updated else (float('inf'), m)
+    )
+
+    # Build ordered model_breakdown and per-model metadata
+    ordered_model_breakdown = {model: model_counts[model] for model in ordered_models}
+    model_last_updated_at = {
+        model: model_latest_updated[model].isoformat()
+        for model in ordered_models
+        if model in model_latest_updated
+    }
+    model_tokens_used = {
+        model: model_total_tokens[model]
+        for model in ordered_models
+        if model in model_total_tokens
+    }
 
     return LocalCodexSnapshot(
-        session_count=len(rows),
-        sessions_last_24h=sum(timestamp >= reference_time - timedelta(hours=24) for timestamp in valid_timestamps),
-        sessions_last_7d=sum(timestamp >= reference_time - timedelta(days=7) for timestamp in valid_timestamps),
-        tokens_used=total_tokens if has_tokens else None,
-        model_breakdown=dict(models.most_common()),
-        last_updated_at=max(valid_timestamps).isoformat() if valid_timestamps else None,
+        session_count=activity_rows,
+        sessions_last_24h=sum(timestamp >= reference_time - timedelta(hours=24) for timestamp in activity_timestamps),
+        sessions_last_7d=sum(timestamp >= reference_time - timedelta(days=7) for timestamp in activity_timestamps),
+        tokens_used=activity_total_tokens if activity_has_tokens else None,
+        model_breakdown=ordered_model_breakdown,
+        model_last_updated_at=model_last_updated_at,
+        model_tokens_used=model_tokens_used,
+        last_updated_at=max(activity_timestamps).isoformat() if activity_timestamps else None,
     )
 
 
