@@ -35,7 +35,7 @@ jobs:
       - name: Build exe
         run: |
           cd python
-           pyinstaller --name AIUsageTray --onefile --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean main.py
+            pyinstaller --name AIUsageTray --onefile --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
