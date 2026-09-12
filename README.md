@@ -12,6 +12,8 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 - **Browser-based OAuth** — PKCE flow matching Codex CLI (no device codes)
 - **Live usage display** in settings window (5h hourly + 7d weekly windows)
 - **Reset credits** counter with countdown timers
+- **Dashboard theme toggle** with persistent light and dark modes
+- **Recent model activity** showing models used within the last 72 hours
 - **Launch on Startup** via Windows registry toggle
 - **Catppuccin Mocha** themed settings window with PyQt6
 - **Standalone .exe** — no Python installation required
@@ -56,7 +58,8 @@ before the nearest available credit expires.
 
 The dashboard opens from the tray icon and includes live limit cards, reset
 credit details, local session activity, usage history, and locally observed
-token/model metadata when available.
+token/model metadata when available. The model section shows only activity from
+the last 72 hours, and the theme button switches between light and dark mode.
 
 ## Quick Start
 
@@ -98,7 +101,8 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   "reset_credit_notify_15_minutes": 15,
   "codex_enabled": true,
   "launch_on_startup": false,
-  "display_mode": "icon"
+  "display_mode": "icon",
+  "dark_mode": false
 }
 ```
 
