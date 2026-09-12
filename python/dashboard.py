@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from PyQt6.QtCore import QPoint, QRect, QSize, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, QThread, Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
@@ -153,6 +153,32 @@ def _format_tokens(value: Optional[int]) -> str:
     return "{:,}".format(value)
 
 
+def _format_relative_time(value: Optional[str], now: Optional[datetime] = None) -> str:
+    """Format a timestamp as a relative time string (e.g., 'just now', '5m ago', '2h 30m ago')."""
+    if not value:
+        return "unknown"
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        timestamp_utc = timestamp.astimezone(timezone.utc)
+        diff = reference - timestamp_utc
+        total_seconds = int(diff.total_seconds())
+        if total_seconds <= 0:
+            return "just now"
+        if total_seconds < 60:
+            return "{}s ago".format(total_seconds)
+        minutes = total_seconds // 60
+        if minutes < 60:
+            return "{}m ago".format(minutes)
+        hours = minutes // 60
+        remaining_minutes = minutes % 60
+        if remaining_minutes == 0:
+            return "{}h ago".format(hours)
+        return "{}h {}m ago".format(hours, remaining_minutes)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "unknown"
+
+
 def _nearest_credit_expiry(api_data: dict) -> Optional[object]:
     direct_expiry = api_data.get("reset_credits_expires_at")
     if direct_expiry:
@@ -185,9 +211,18 @@ def build_dashboard_state(
     seven_day = api_data.get("seven_day")
     plan = api_data.get("plan_type") or "Not available"
     credits = api_data.get("reset_credits")
-    model_rows = tuple((model, "{} sessions".format(count)) for model, count in local.model_breakdown.items())
+    reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    model_rows = []
+    for model, count in local.model_breakdown.items():
+        tokens = local.model_tokens_used.get(model)
+        last_updated = local.model_last_updated_at.get(model)
+        tokens_str = _format_tokens(tokens)
+        relative_time = _format_relative_time(last_updated, reference_time)
+        model_rows.append((model, "{} tokens • last used {}".format(tokens_str, relative_time)))
     if not model_rows:
-        model_rows = (("Model breakdown", "Not available"),)
+        model_rows = [("Model breakdown", "Not available")]
+
     observed = "No local limit observation available"
     if local.observed_primary or local.observed_secondary:
         observed = "Local rate-limit observation available (not used for live limits)"
@@ -204,7 +239,7 @@ def build_dashboard_state(
         sessions_7d=str(local.sessions_last_7d),
         total_sessions=str(local.session_count),
         tokens=_format_tokens(local.tokens_used),
-        model_rows=model_rows,
+        model_rows=tuple(model_rows),
         local_observation=observed,
         usage_history=history,
     )
@@ -240,8 +275,15 @@ class DashboardWindow(QWidget):
         self._anchor = anchor
         self._worker: Optional[DashboardRefreshWorker] = None
         self._closing = False
+        self._refresh_scheduled = False
         self._init_ui()
-        self.refresh()
+        # Defer initial refresh until event loop is running (queued after startup)
+        QTimer.singleShot(0, self._schedule_initial_refresh)
+
+    def _schedule_initial_refresh(self) -> None:
+        if not self._refresh_scheduled:
+            self._refresh_scheduled = True
+            self.refresh()
 
     def _init_ui(self) -> None:
         self.setObjectName("codexDashboard")

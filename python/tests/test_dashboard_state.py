@@ -25,6 +25,8 @@ class DashboardStateTests(unittest.TestCase):
             sessions_last_7d=3,
             tokens_used=1200,
             model_breakdown={"gpt-5": 4},
+            model_last_updated_at={"gpt-5": "2026-09-01T12:00:00+00:00"},
+            model_tokens_used={"gpt-5": 1200},
             last_updated_at="2026-09-01T12:00:00+00:00",
         )
         state = build_dashboard_state(
@@ -46,7 +48,47 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(state.seven_day, "70%")
         self.assertEqual(state.credit_expiry, "1h 0m")
         self.assertEqual(state.tokens, "1,200")
-        self.assertEqual(state.model_rows, (("gpt-5", "4 sessions"),))
+        # Model rows now show aggregate tokens and last used relative time
+        self.assertEqual(state.model_rows, (("gpt-5", "1,200 tokens • last used just now"),))
+
+    def test_model_rows_show_aggregate_tokens_and_last_used_relative_time(self):
+        """Model rows display aggregate tokens and truthful 'last used <relative time>'."""
+        local = LocalCodexSnapshot(
+            session_count=5,
+            sessions_last_24h=3,
+            sessions_last_7d=5,
+            tokens_used=2500,
+            model_breakdown={"model-b": 3, "model-a": 2},
+            model_last_updated_at={
+                "model-b": "2026-09-01T14:00:00+00:00",
+                "model-a": "2026-09-01T10:00:00+00:00",
+            },
+            model_tokens_used={"model-b": 1500, "model-a": 1000},
+            last_updated_at="2026-09-01T14:00:00+00:00",
+        )
+        state = build_dashboard_state(
+            None,
+            local,
+            datetime(2026, 9, 1, 14, 30, tzinfo=timezone.utc),  # 30 min after model-b, 4h30m after model-a
+        )
+
+        # Models ordered by latest updated_at desc (model-b first, then model-a)
+        self.assertEqual(len(state.model_rows), 2)
+        self.assertEqual(state.model_rows[0][0], "model-b")
+        self.assertEqual(state.model_rows[1][0], "model-a")
+        # model-b: 1,500 tokens, last used 30 min ago
+        self.assertIn("1,500 tokens", state.model_rows[0][1])
+        self.assertIn("last used 30m", state.model_rows[0][1])
+        # model-a: 1,000 tokens, last used 4h 30m ago
+        self.assertIn("1,000 tokens", state.model_rows[1][1])
+        self.assertIn("last used 4h 30m", state.model_rows[1][1])
+
+    def test_model_rows_fallback_when_no_model_data(self):
+        """When no model data available, show fallback row."""
+        local = LocalCodexSnapshot()
+        state = build_dashboard_state(None, local)
+
+        self.assertEqual(state.model_rows, (("Model breakdown", "Not available"),))
 
     def test_popup_position_clamps_an_oversized_panel_inside_available_geometry(self):
         position = calculate_popup_position(
