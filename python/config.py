@@ -23,6 +23,7 @@ class AppConfig:
     codex_enabled: bool = True
     launch_on_startup: bool = False
     display_mode: str = "icon"
+    dark_mode: bool = False
 
 
 CONFIG_DIR = Path.home() / "AppData" / "Local" / "AI-Usage-Tray"
@@ -51,6 +52,14 @@ def save_config(config: AppConfig):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(asdict(config), f, indent=2)
+
+
+def set_dark_mode(dark_mode: bool) -> AppConfig:
+    """Persist a theme preference without overwriting newer settings."""
+    config = load_config()
+    config.dark_mode = dark_mode
+    save_config(config)
+    return config
 
 
 def get_codex_auth_path() -> Path:
