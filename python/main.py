@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import load_config
-from tray import TrayManager
 from logger import Logger
 
 
@@ -71,7 +70,8 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Start tray manager
+    # Start tray manager (lazy import to avoid tray stack in dashboard child)
+    from tray import TrayManager
     tray = TrayManager(config)
     
     try:
