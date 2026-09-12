@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from PyQt6.QtCore import QPoint, QRect, QSize, QThread, Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QResizeEvent
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from cache import CacheManager
-from config import AppConfig
+from config import AppConfig, set_dark_mode
 from local_codex import (
     LocalCodexSnapshot,
     UsageSnapshot,
@@ -62,6 +62,7 @@ class DashboardTheme:
     BORDER_WIDTH = 1
     FONT_EYEBROW = 10
     FONT_BODY = 11
+    FONT_MODEL = 14
     FONT_SECTION = 13
     FONT_METRIC = 15
     FONT_CLOSE = 18
@@ -70,21 +71,66 @@ class DashboardTheme:
     LETTER_SPACING = 1
     BUTTON_HEIGHT = 28
     CLOSE_BUTTON_WIDTH = 28
-    WINDOW = "#f3f7fa"
-    SHELL = "#ffffff"
-    SURFACE = "#f7fafc"
-    PRIMARY_SURFACE = "#e8f6fa"
-    WEEKLY_SURFACE = "#ebf7f1"
-    BORDER = "#cbd9e1"
-    PRIMARY_BORDER = "#9bd5e3"
-    WEEKLY_BORDER = "#a8d9c5"
-    TEXT = "#163247"
-    MUTED = "#587082"
-    ACCENT = "#0b7187"
-    ACCENT_HOVER = "#075d70"
-    ACCENT_DISABLED = "#9cc4cd"
-    WEEKLY_VALUE = "#17694f"
-    CONTROL_TEXT = "#ffffff"
+    LIGHT_PALETTE = {
+        "window": "#f3f7fa",
+        "shell": "#ffffff",
+        "surface": "#f7fafc",
+        "primary_surface": "#e8f6fa",
+        "weekly_surface": "#ebf7f1",
+        "border": "#cbd9e1",
+        "primary_border": "#9bd5e3",
+        "weekly_border": "#a8d9c5",
+        "text": "#163247",
+        "muted": "#587082",
+        "accent": "#0b7187",
+        "accent_hover": "#075d70",
+        "accent_disabled": "#9cc4cd",
+        "weekly_value": "#17694f",
+        "control_text": "#ffffff",
+    }
+    DARK_PALETTE = {
+        "window": "#10171d",
+        "shell": "#172128",
+        "surface": "#1d2a33",
+        "primary_surface": "#12313b",
+        "weekly_surface": "#16342a",
+        "border": "#36505d",
+        "primary_border": "#2f8193",
+        "weekly_border": "#34735a",
+        "text": "#eef6f8",
+        "muted": "#aec0c8",
+        "accent": "#4fc3d7",
+        "accent_hover": "#82d9e7",
+        "accent_disabled": "#466c76",
+        "weekly_value": "#75d4a5",
+        "control_text": "#102126",
+    }
+
+    @classmethod
+    def palette(cls, dark_mode: bool) -> dict[str, str]:
+        return cls.DARK_PALETTE if dark_mode else cls.LIGHT_PALETTE
+
+
+class ElidedLabel(QLabel):
+    def __init__(self, text: str, object_name: str):
+        super().__init__(text, objectName=object_name)
+        self._full_text = text
+        self.setToolTip(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.setText(self.fontMetrics().elidedText(
+            self._full_text,
+            Qt.TextElideMode.ElideRight,
+            self.contentsRect().width(),
+        ))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(DashboardTheme.NONE, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:
+        return QSize(DashboardTheme.NONE, super().sizeHint().height())
 
 
 def calculate_popup_position(anchor: QPoint, panel_size: QSize, available: QRect) -> QPoint:
@@ -179,6 +225,15 @@ def _format_relative_time(value: Optional[str], now: Optional[datetime] = None) 
         return "unknown"
 
 
+def _parse_model_updated_at(value: object) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def _nearest_credit_expiry(api_data: dict) -> Optional[object]:
     direct_expiry = api_data.get("reset_credits_expires_at")
     if direct_expiry:
@@ -212,11 +267,15 @@ def build_dashboard_state(
     plan = api_data.get("plan_type") or "Not available"
     credits = api_data.get("reset_credits")
     reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    model_cutoff = reference_time - timedelta(hours=72)
 
     model_rows = []
     for model, count in local.model_breakdown.items():
         tokens = local.model_tokens_used.get(model)
         last_updated = local.model_last_updated_at.get(model)
+        updated_at = _parse_model_updated_at(last_updated)
+        if updated_at is None or updated_at < model_cutoff:
+            continue
         tokens_str = _format_tokens(tokens)
         relative_time = _format_relative_time(last_updated, reference_time)
         model_rows.append((model, "{} tokens • last used {}".format(tokens_str, relative_time)))
@@ -296,50 +355,7 @@ class DashboardWindow(QWidget):
         self.setFixedWidth(DashboardTheme.PANEL_WIDTH)
         self.setMinimumHeight(DashboardTheme.NONE)
         self.resize(DashboardTheme.PANEL_WIDTH, DashboardTheme.PREFERRED_HEIGHT)
-        self.setStyleSheet("""
-            QWidget#codexDashboard {{ background: {window}; color: {text}; font-family: 'Aptos', 'Segoe UI', sans-serif; }}
-            QFrame#shell {{ background: {shell}; border: {border_width}px solid {border}; border-radius: {panel_radius}px; }}
-            QScrollArea#dashboardScroll, QScrollArea#dashboardScroll QWidget {{ border: 0; background: {shell}; }}
-            QScrollBar:vertical {{ width: {scrollbar_width}px; background: {shell}; margin: {space_1}px; }}
-            QScrollBar::handle:vertical {{ background: {border}; border-radius: {scrollbar_radius}px; min-height: {scrollbar_minimum}px; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-            QFrame#usageCard {{ background: {surface}; border: {border_width}px solid {border}; border-radius: {card_radius}px; }}
-            QFrame#primaryCard {{ background: {primary_surface}; border: {border_width}px solid {primary_border}; border-radius: {card_radius}px; }}
-            QFrame#weeklyCard {{ background: {weekly_surface}; border: {border_width}px solid {weekly_border}; border-radius: {card_radius}px; }}
-            QFrame#metricCard, QFrame#modelRow {{ background: {surface}; border: {border_width}px solid {border}; border-radius: {card_radius}px; }}
-            QLabel#eyebrow {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; letter-spacing: {letter_spacing}px; }}
-            QLabel#title {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_title}px; font-weight: 700; }}
-            QLabel#subtitle, QLabel#muted {{ color: {muted}; font-size: {font_body}px; }}
-            QLabel#cardTitle {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; }}
-            QLabel#usageValue {{ color: {accent}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_usage}px; font-weight: 700; }}
-            QLabel#weeklyValue {{ color: {weekly_value}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_usage}px; font-weight: 700; }}
-            QLabel#metricValue {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_metric}px; font-weight: 700; }}
-            QLabel#sectionTitle {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_section}px; font-weight: 700; }}
-            QPushButton#refreshButton {{ background: {accent}; color: {control_text}; border: 0; border-radius: {control_radius}px; min-height: {button_height}px; padding: 0 {space_2}px; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-weight: 700; }}
-            QPushButton#refreshButton:hover {{ background: {accent_hover}; }}
-            QPushButton#refreshButton:disabled {{ background: {accent_disabled}; }}
-            QToolButton#closeButton {{ color: {muted}; border: 0; border-radius: {control_radius}px; font-size: {font_close}px; min-width: {close_button_width}px; min-height: {button_height}px; }}
-            QToolButton#closeButton:hover {{ background: {surface}; color: {text}; }}
-        """.format(
-            window=DashboardTheme.WINDOW, text=DashboardTheme.TEXT, shell=DashboardTheme.SHELL,
-            border=DashboardTheme.BORDER, border_width=DashboardTheme.BORDER_WIDTH,
-            panel_radius=DashboardTheme.RADIUS_PANEL,
-            scrollbar_width=DashboardTheme.SPACE_2, space_1=DashboardTheme.SPACE_1,
-            scrollbar_radius=DashboardTheme.SPACE_1, scrollbar_minimum=DashboardTheme.SPACE_4 * 2,
-            surface=DashboardTheme.SURFACE, primary_surface=DashboardTheme.PRIMARY_SURFACE,
-            primary_border=DashboardTheme.PRIMARY_BORDER, card_radius=DashboardTheme.RADIUS_CARD,
-            weekly_surface=DashboardTheme.WEEKLY_SURFACE, weekly_border=DashboardTheme.WEEKLY_BORDER,
-            accent=DashboardTheme.ACCENT, muted=DashboardTheme.MUTED,
-            weekly_value=DashboardTheme.WEEKLY_VALUE, control_radius=DashboardTheme.RADIUS_CONTROL,
-            font_eyebrow=DashboardTheme.FONT_EYEBROW, font_title=DashboardTheme.FONT_TITLE,
-            font_body=DashboardTheme.FONT_BODY, font_usage=DashboardTheme.FONT_USAGE,
-            font_metric=DashboardTheme.FONT_METRIC, font_section=DashboardTheme.FONT_SECTION,
-            letter_spacing=DashboardTheme.LETTER_SPACING, control_text=DashboardTheme.CONTROL_TEXT,
-            button_height=DashboardTheme.BUTTON_HEIGHT, font_close=DashboardTheme.FONT_CLOSE,
-            close_button_width=DashboardTheme.CLOSE_BUTTON_WIDTH,
-            space_2=DashboardTheme.SPACE_2, accent_hover=DashboardTheme.ACCENT_HOVER,
-            accent_disabled=DashboardTheme.ACCENT_DISABLED,
-        ))
+        self._apply_theme()
 
         page = QVBoxLayout(self)
         page.setContentsMargins(DashboardTheme.NONE, DashboardTheme.NONE, DashboardTheme.NONE, DashboardTheme.NONE)
@@ -361,6 +377,10 @@ class DashboardWindow(QWidget):
         self._refresh_button = QPushButton("Refresh", objectName="refreshButton")
         self._refresh_button.clicked.connect(self.refresh)
         header.addWidget(self._refresh_button, alignment=Qt.AlignmentFlag.AlignTop)
+        self._theme_button = QToolButton(objectName="themeToggle")
+        self._theme_button.clicked.connect(self._toggle_dark_mode)
+        self._apply_theme()
+        header.addWidget(self._theme_button, alignment=Qt.AlignmentFlag.AlignTop)
         close_button = QToolButton(objectName="closeButton")
         close_button.setText("X")
         close_button.setToolTip("Close dashboard")
@@ -421,6 +441,73 @@ class DashboardWindow(QWidget):
         self._observation.setWordWrap(True)
         content.addWidget(self._observation)
         content.addStretch()
+
+    def _apply_theme(self) -> None:
+        palette = DashboardTheme.palette(self._config.dark_mode)
+        self.setStyleSheet("""
+            QWidget#codexDashboard {{ background: {window}; color: {text}; font-family: 'Aptos', 'Segoe UI', sans-serif; }}
+            QFrame#shell {{ background: {shell}; border: {border_width}px solid {border}; border-radius: {panel_radius}px; }}
+            QScrollArea#dashboardScroll, QScrollArea#dashboardScroll QWidget {{ border: 0; background: {shell}; }}
+            QScrollBar:vertical {{ width: {scrollbar_width}px; background: {shell}; margin: {space_1}px; }}
+            QScrollBar::handle:vertical {{ background: {border}; border-radius: {scrollbar_radius}px; min-height: {scrollbar_minimum}px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QFrame#usageCard {{ background: {surface}; border: {border_width}px solid {border}; border-radius: {card_radius}px; }}
+            QFrame#primaryCard {{ background: {primary_surface}; border: {border_width}px solid {primary_border}; border-radius: {card_radius}px; }}
+            QFrame#weeklyCard {{ background: {weekly_surface}; border: {border_width}px solid {weekly_border}; border-radius: {card_radius}px; }}
+            QFrame#metricCard, QFrame#modelRow {{ background: {surface}; border: {border_width}px solid {border}; border-radius: {card_radius}px; }}
+            QLabel#eyebrow {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; letter-spacing: {letter_spacing}px; }}
+            QLabel#title {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_title}px; font-weight: 700; }}
+            QLabel#subtitle, QLabel#muted {{ color: {muted}; font-size: {font_body}px; }}
+            QLabel#cardTitle {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; }}
+            QLabel#usageValue {{ color: {accent}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_usage}px; font-weight: 700; }}
+            QLabel#weeklyValue {{ color: {weekly_value}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_usage}px; font-weight: 700; }}
+            QLabel#metricValue {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_metric}px; font-weight: 700; }}
+            QLabel#sectionTitle {{ color: {text}; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-size: {font_section}px; font-weight: 700; }}
+            QLabel#modelName {{ color: {text}; font-size: {font_model}px; font-weight: 700; }}
+            QLabel#modelDetail {{ color: {muted}; font-size: {font_body}px; }}
+            QPushButton#refreshButton {{ background: {accent}; color: {control_text}; border: 0; border-radius: {control_radius}px; min-height: {button_height}px; padding: 0 {space_2}px; font-family: 'Aptos Display', 'Segoe UI', sans-serif; font-weight: 700; }}
+            QPushButton#refreshButton:hover {{ background: {accent_hover}; }}
+            QPushButton#refreshButton:disabled {{ background: {accent_disabled}; }}
+            QToolButton#themeToggle {{ background: {surface}; color: {text}; border: {border_width}px solid {border}; border-radius: {control_radius}px; font-size: {font_section}px; min-width: {close_button_width}px; min-height: {button_height}px; }}
+            QToolButton#themeToggle:hover {{ background: {primary_surface}; border-color: {primary_border}; }}
+            QToolButton#closeButton {{ color: {muted}; border: 0; border-radius: {control_radius}px; font-size: {font_close}px; min-width: {close_button_width}px; min-height: {button_height}px; }}
+            QToolButton#closeButton:hover {{ background: {surface}; color: {text}; }}
+        """.format(
+            **palette,
+            border_width=DashboardTheme.BORDER_WIDTH,
+            panel_radius=DashboardTheme.RADIUS_PANEL,
+            scrollbar_width=DashboardTheme.SPACE_2,
+            space_1=DashboardTheme.SPACE_1,
+            scrollbar_radius=DashboardTheme.SPACE_1,
+            scrollbar_minimum=DashboardTheme.SPACE_4 * 2,
+            card_radius=DashboardTheme.RADIUS_CARD,
+            control_radius=DashboardTheme.RADIUS_CONTROL,
+            font_eyebrow=DashboardTheme.FONT_EYEBROW,
+            font_title=DashboardTheme.FONT_TITLE,
+            font_body=DashboardTheme.FONT_BODY,
+            font_model=DashboardTheme.FONT_MODEL,
+            font_usage=DashboardTheme.FONT_USAGE,
+            font_metric=DashboardTheme.FONT_METRIC,
+            font_section=DashboardTheme.FONT_SECTION,
+            letter_spacing=DashboardTheme.LETTER_SPACING,
+            button_height=DashboardTheme.BUTTON_HEIGHT,
+            font_close=DashboardTheme.FONT_CLOSE,
+            close_button_width=DashboardTheme.CLOSE_BUTTON_WIDTH,
+            space_2=DashboardTheme.SPACE_2,
+        ))
+        if hasattr(self, "_theme_button"):
+            if self._config.dark_mode:
+                self._theme_button.setText("☀")
+                self._theme_button.setToolTip("Switch to light mode")
+                self._theme_button.setAccessibleName("Switch to light mode")
+            else:
+                self._theme_button.setText("☾")
+                self._theme_button.setToolTip("Switch to dark mode")
+                self._theme_button.setAccessibleName("Switch to dark mode")
+
+    def _toggle_dark_mode(self) -> None:
+        self._config = set_dark_mode(not self._config.dark_mode)
+        self._apply_theme()
 
     def _make_limit_card(self, title: str, name: str) -> tuple[QFrame, QLabel, QLabel]:
         card = QFrame(objectName=name)
@@ -508,20 +595,28 @@ class DashboardWindow(QWidget):
             child = self._model_list.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        for model, count in state.model_rows:
+        for model, detail in state.model_rows:
             row_widget = QFrame(objectName="modelRow")
-            row = QHBoxLayout(row_widget)
-            row.setContentsMargins(DashboardTheme.SPACE_2, DashboardTheme.SPACE_1, DashboardTheme.SPACE_2, DashboardTheme.SPACE_1)
-            row.setSpacing(DashboardTheme.SPACE_2)
-            model_label = QLabel(model, objectName="muted")
-            model_label.setWordWrap(True)
-            model_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            row.addWidget(model_label, 1)
-            row.addStretch()
-            count_label = QLabel(count, objectName="metricValue")
-            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            count_label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
-            row.addWidget(count_label)
+            row_widget.setMaximumWidth(
+                DashboardTheme.PANEL_WIDTH - (
+                    DashboardTheme.SPACE_3
+                    + DashboardTheme.SPACE_2 * 2
+                    + DashboardTheme.SPACE_1 * 2
+                ),
+            )
+            row = QVBoxLayout(row_widget)
+            row.setContentsMargins(
+                DashboardTheme.SPACE_2,
+                DashboardTheme.SPACE_2,
+                DashboardTheme.SPACE_2,
+                DashboardTheme.SPACE_2,
+            )
+            row.setSpacing(DashboardTheme.SPACE_TIGHT)
+            model_label = ElidedLabel(model, "modelName")
+            row.addWidget(model_label)
+            detail_label = QLabel(detail, objectName="modelDetail")
+            detail_label.setWordWrap(True)
+            row.addWidget(detail_label)
             self._model_list.addWidget(row_widget)
 
     def place_near_anchor(self, anchor: Optional[QPoint] = None) -> None:
