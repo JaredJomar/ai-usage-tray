@@ -5,18 +5,20 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 ## Features
 
 - **System tray icon** that changes color based on usage:
-  - 🟢 Green: 0–59%
-  - 🟠 Orange: 60–84%
+  - 🟢 Green: 0-59%
+  - 🟠 Orange: 60-84%
   - 🔴 Red: 85%+
 - **Tooltip with compact progress bars** and reset countdowns
-- **Browser-based OAuth** — PKCE flow matching Codex CLI (no device codes)
-- **Live usage display** in settings window (5h hourly + 7d weekly windows)
+- **Browser-based OAuth**, PKCE flow matching Codex CLI (no device codes)
+- **Codex Analytics dashboard** with live usage display (5h hourly + 7d weekly windows)
+- **Show Sections toggles** for Balance, Credits, Usage breakdown, Local activity, History, and title-only Codex Analytics visibility
+- **Group by Day** averaging for usage snapshots, available only with History visible
 - **Reset credits** counter with countdown timers
 - **Dashboard theme toggle** with persistent light and dark modes
 - **Recent model activity** showing models used within the last 72 hours
-- **Launch on Startup** via Windows registry toggle
+- **Launch on Startup** enabled by default via Windows registry, with tray and Settings opt-out
 - **Catppuccin Mocha** themed settings window with PyQt6
-- **Standalone .exe** — no Python installation required
+- **Standalone .exe**, no Python installation required
 
 ## Screenshots
 
@@ -56,10 +58,14 @@ before the nearest available credit expires.
 └────────────────────────────────────────────┘
 ```
 
-The dashboard opens from the tray icon and includes live limit cards, reset
+The dashboard opens from the tray icon as Codex Analytics and includes live limit cards, reset
 credit details, local session activity, usage history, and locally observed
 token/model metadata when available. The model section shows only activity from
 the last 72 hours, and the theme button switches between light and dark mode.
+The settings (gear) panel offers Show Sections toggles for Balance, Credits,
+Usage breakdown, Local activity, History, and Codex Analytics. The Codex
+Analytics toggle controls only the title label, while Group by Day averages
+usage snapshots per day and is shown only when History is visible.
 
 ## Quick Start
 
@@ -76,12 +82,14 @@ python main.py
 3. Authenticate with your OpenAI account
 4. Token is saved to `~/.codex/auth.json`
 
-The app uses the same PKCE OAuth flow as the Codex CLI — authorization code with S256 code verifier, no device codes or API keys needed.
+The app uses the same PKCE OAuth flow as the Codex CLI: authorization code with S256 code verifier, no device codes or API keys needed.
 
 ## Auto-Start
 
-- **Tray menu**: Right-click → **Launch on Startup**
-- **Settings window**: Startup tab → **Launch on Windows Startup**
+Launch on startup is enabled by default (`launch_on_startup: true`).
+
+- **Tray menu**: Right-click → **Launch on Startup** (uncheck to opt out)
+- **Settings window**: Startup tab → **Launch on Windows Startup** (uncheck to opt out)
 
 Uses `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key.
 
@@ -100,11 +108,25 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   "reset_credit_notify_60_minutes": 60,
   "reset_credit_notify_15_minutes": 15,
   "codex_enabled": true,
-  "launch_on_startup": false,
+  "launch_on_startup": true,
   "display_mode": "icon",
-  "dark_mode": false
+  "dark_mode": false,
+  "section_visibility": {
+    "codex_analytics": true,
+    "balance": true,
+    "credits": true,
+    "usage_breakdown": true,
+    "local_activity": true,
+    "history": true
+  }
 }
 ```
+
+## Releases
+
+v1.0.8 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.8/AIUsageTray-Windows.exe)
+from the [v1.0.8 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.8).
+Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API
 
