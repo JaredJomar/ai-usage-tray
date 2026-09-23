@@ -5,9 +5,25 @@ import json
 import os
 import shutil
 from pathlib import Path
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import certifi
+
+
+SECTION_VISIBILITY_KEYS = (
+    "codex_analytics", "balance", "credits", "usage_breakdown", "local_activity", "history",
+)
+
+
+@dataclass
+class SectionVisibility:
+    """Which dashboard sections are shown; every section defaults to visible."""
+    codex_analytics: bool = True
+    balance: bool = True
+    credits: bool = True
+    usage_breakdown: bool = True
+    local_activity: bool = True
+    history: bool = True
 
 
 @dataclass
@@ -21,9 +37,24 @@ class AppConfig:
     reset_credit_notify_60_minutes: int = 60
     reset_credit_notify_15_minutes: int = 15
     codex_enabled: bool = True
-    launch_on_startup: bool = False
+    launch_on_startup: bool = True
     display_mode: str = "icon"
     dark_mode: bool = False
+    section_visibility: SectionVisibility = field(default_factory=SectionVisibility)
+
+
+def _coerce_section_visibility(value: object) -> SectionVisibility:
+    """Normalize stored section visibility, tolerating missing or invalid data."""
+    if isinstance(value, SectionVisibility):
+        return value
+    if not isinstance(value, dict):
+        return SectionVisibility()
+    visibility = SectionVisibility()
+    for key in SECTION_VISIBILITY_KEYS:
+        stored = value.get(key)
+        if isinstance(stored, bool):
+            setattr(visibility, key, stored)
+    return visibility
 
 
 CONFIG_DIR = Path.home() / "AppData" / "Local" / "AI-Usage-Tray"
@@ -38,7 +69,10 @@ def load_config() -> AppConfig:
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
-            return AppConfig(**{k: v for k, v in data.items() if k in AppConfig.__dataclass_fields__})
+            fields = {k: v for k, v in data.items() if k in AppConfig.__dataclass_fields__}
+            if "section_visibility" in fields:
+                fields["section_visibility"] = _coerce_section_visibility(fields["section_visibility"])
+            return AppConfig(**fields)
         except Exception:
             return AppConfig()
 
@@ -58,6 +92,14 @@ def set_dark_mode(dark_mode: bool) -> AppConfig:
     """Persist a theme preference without overwriting newer settings."""
     config = load_config()
     config.dark_mode = dark_mode
+    save_config(config)
+    return config
+
+
+def set_section_visibility(visibility: SectionVisibility) -> AppConfig:
+    """Persist dashboard section toggles without overwriting newer settings."""
+    config = load_config()
+    config.section_visibility = visibility
     save_config(config)
     return config
 

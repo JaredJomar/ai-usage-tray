@@ -38,6 +38,17 @@ def test_dark_mode_defaults_false_and_persists_through_config_file(monkeypatch, 
     assert config.load_config().dark_mode is True
 
 
+def test_launch_on_startup_defaults_true_and_explicit_false_is_preserved(monkeypatch, tmp_path):
+    config_path = tmp_path / "app" / "config.json"
+    monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_path)
+
+    assert config.load_config().launch_on_startup is True
+
+    config_path.write_text('{"launch_on_startup": false}', encoding="utf-8")
+    assert config.load_config().launch_on_startup is False
+
+
 def test_legacy_config_without_dark_mode_keeps_default(monkeypatch, tmp_path):
     config_path = tmp_path / "app" / "config.json"
     config_path.parent.mkdir(parents=True)
@@ -49,6 +60,68 @@ def test_legacy_config_without_dark_mode_keeps_default(monkeypatch, tmp_path):
 
     assert loaded.refresh_interval_seconds == 120
     assert loaded.dark_mode is False
+    assert loaded.section_visibility == config.SectionVisibility()
+
+
+def test_section_visibility_defaults_all_visible_and_round_trips(monkeypatch, tmp_path):
+    config_path = tmp_path / "app" / "config.json"
+    monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_path)
+
+    assert config.load_config().section_visibility == config.SectionVisibility(
+        balance=True, credits=True, usage_breakdown=True, local_activity=True,
+    )
+
+    saved = config.AppConfig()
+    saved.section_visibility.usage_breakdown = False
+    config.save_config(saved)
+
+    reloaded = config.load_config()
+    assert reloaded.section_visibility.usage_breakdown is False
+    assert reloaded.section_visibility.balance is True
+
+
+def test_partial_or_invalid_section_visibility_is_coerced_safely(monkeypatch, tmp_path):
+    config_path = tmp_path / "app" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '{"section_visibility": {"balance": false, "credits": "nope"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_path)
+
+    partial = config.load_config().section_visibility
+    assert partial.balance is False
+    assert partial.credits is True
+    assert partial.usage_breakdown is True
+    assert partial.local_activity is True
+
+    config_path.write_text('{"section_visibility": "broken"}', encoding="utf-8")
+    broken = config.load_config().section_visibility
+    assert broken == config.SectionVisibility()
+
+
+def test_set_section_visibility_preserves_settings_saved_after_dashboard_opens(monkeypatch, tmp_path):
+    config_path = tmp_path / "app" / "config.json"
+    monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_path)
+    config.save_config(config.AppConfig(refresh_interval_seconds=60, cache_ttl_seconds=30))
+
+    dashboard_config = config.load_config()
+    settings_config = config.load_config()
+    settings_config.refresh_interval_seconds = 120
+    settings_config.cache_ttl_seconds = 90
+    config.save_config(settings_config)
+
+    visibility = config.SectionVisibility(local_activity=False)
+    saved = config.set_section_visibility(visibility)
+
+    assert saved.section_visibility.local_activity is False
+    assert saved.refresh_interval_seconds == 120
+    assert saved.cache_ttl_seconds == 90
+    assert saved.dark_mode == dashboard_config.dark_mode
+    assert config.load_config() == saved
 
 
 def test_set_dark_mode_preserves_settings_saved_after_dashboard_opens(monkeypatch, tmp_path):
