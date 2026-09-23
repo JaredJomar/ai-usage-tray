@@ -59,7 +59,7 @@ class TrayManager:
         try:
             exe_path = sys.executable
             if getattr(sys, 'frozen', False):
-                exe_path = sys.executable
+                exe_path = '"{}"'.format(sys.executable)
             else:
                 exe_path = '"{}" "{}"'.format(sys.executable, str(Path(__file__).parent / "main.py"))
 
@@ -79,6 +79,9 @@ class TrayManager:
 
     def run(self):
         self._running = True
+
+        if self._config.launch_on_startup and not self._is_auto_start_enabled():
+            self._set_auto_start(True)
 
         icon = self._create_icon((68, 255, 68))
         auto_start_checked = self._is_auto_start_enabled()
@@ -414,7 +417,7 @@ class TrayManager:
     @staticmethod
     def _child_environment() -> dict[str, str]:
         environment = os.environ.copy()
-        environment.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+        environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         return environment
 
     @staticmethod
@@ -478,7 +481,10 @@ class TrayManager:
     
     def _on_toggle_auto_start(self, icon, item):
         current = self._is_auto_start_enabled()
-        self._set_auto_start(not current)
+        enabled = not current
+        self._set_auto_start(enabled)
+        self._config.launch_on_startup = enabled
+        save_config(self._config)
 
     def _on_open_log_folder(self, icon, item):
         log_dir = Path.home() / "AppData" / "Local" / "AI-Usage-Tray" / "logs"

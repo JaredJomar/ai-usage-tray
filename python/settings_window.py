@@ -65,7 +65,7 @@ class SettingsWindow(QWidget):
     def _set_auto_start(cls, enable: bool):
         try:
             if getattr(sys, "frozen", False):
-                executable = sys.executable
+                executable = '"{}"'.format(sys.executable)
             else:
                 executable = '"{}" "{}"'.format(
                     sys.executable, str(Path(__file__).parent / "main.py"),

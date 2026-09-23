@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import threading
+from types import SimpleNamespace
 
+import settings_window as settings_module
 import tray as tray_module
 from config import AppConfig
 from tray import TrayManager
@@ -73,6 +75,42 @@ def test_tooltip_includes_reset_count_and_nearest_credit_expiry():
 
     assert "RESETS: 3" in tooltip
     assert "expires" in tooltip
+
+
+def test_auto_start_menu_choice_persists_and_overrides_default(monkeypatch):
+    manager = TrayManager.__new__(TrayManager)
+    manager._config = AppConfig(launch_on_startup=True)
+    writes = []
+    monkeypatch.setattr(TrayManager, "_is_auto_start_enabled", staticmethod(lambda: True))
+    monkeypatch.setattr(TrayManager, "_set_auto_start", staticmethod(writes.append))
+    monkeypatch.setattr(tray_module, "save_config", lambda config: writes.append(config.launch_on_startup))
+
+    manager._on_toggle_auto_start(None, None)
+
+    assert writes == [False, False]
+    assert manager._config.launch_on_startup is False
+
+
+def test_auto_start_registry_commands_quote_program_files_paths(monkeypatch):
+    executable = r"C:\Program Files\AI Usage Tray\AIUsageTray.exe"
+    registry_values = []
+    fake_winreg = SimpleNamespace(
+        HKEY_CURRENT_USER="hkcu",
+        KEY_SET_VALUE=1,
+        REG_SZ=1,
+        OpenKey=lambda *args: "run-key",
+        SetValueEx=lambda key, name, reserved, value_type, value: registry_values.append(value),
+        CloseKey=lambda key: None,
+    )
+    monkeypatch.setattr(tray_module.sys, "executable", executable)
+    monkeypatch.setattr(tray_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(tray_module, "winreg", fake_winreg)
+    monkeypatch.setattr(settings_module, "winreg", fake_winreg)
+
+    TrayManager._set_auto_start(True)
+    settings_module.SettingsWindow._set_auto_start(True)
+
+    assert registry_values == ['"{}"'.format(executable), '"{}"'.format(executable)]
 
 
 class FakeChild:
@@ -150,11 +188,13 @@ def test_dashboard_launch_is_debounced(monkeypatch):
     assert len(launches) == 1
 
 
-def test_dashboard_child_environment_keeps_the_existing_pyinstaller_home(monkeypatch):
+def test_dashboard_child_environment_uses_independent_pyinstaller_extraction(monkeypatch):
     monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "C:\\Temp\\_MEI123")
-    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", "C:\\Temp\\AIUsageTray.exe")
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "0")
 
     environment = TrayManager._child_environment()
 
     assert environment["_PYI_APPLICATION_HOME_DIR"] == "C:\\Temp\\_MEI123"
-    assert "PYINSTALLER_RESET_ENVIRONMENT" not in environment
+    assert environment["_PYI_ARCHIVE_FILE"] == "C:\\Temp\\AIUsageTray.exe"
+    assert environment["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
