@@ -32,20 +32,80 @@ jobs:
         working-directory: python
         run: python -m pytest tests -q
 
-      - name: Build exe
+      - name: Build onefile exe
         run: |
           cd python
-            pyinstaller --name AIUsageTray --onefile --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean main.py
+          pyinstaller --name AIUsageTray --onefile --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean main.py
 
-      - name: Upload artifact
+      - name: Build onedir payload
+        run: |
+          cd python
+          pyinstaller --name AIUsageTray --onedir --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean --distpath dist-onedir-final main.py
+
+      - name: Locate or install Inno Setup (ISCC)
+        id: iscc
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 5\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 5\ISCC.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($found) {
+            echo "ISCC_PATH=$found" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          Write-Host "Inno Setup not found, installing via Chocolatey..."
+          choco install innosetup -y --no-progress
+          $installed = @(
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $installed) {
+            Write-Error "ISCC.exe not found after Chocolatey install"
+            exit 1
+          }
+          echo "ISCC_PATH=$installed" >> $env:GITHUB_OUTPUT
+
+      - name: Compile Inno Setup installer
+        shell: pwsh
+        run: |
+          & "${{ steps.iscc.outputs.ISCC_PATH }}" "Installer/AIUsageTray.iss"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ISCC compilation failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify installer output
+        shell: pwsh
+        run: |
+          $installerPath = "Installer/AIUsageTray-Windows.exe"
+          if (-not (Test-Path $installerPath)) {
+            Write-Error "Installer not found at $installerPath"
+            exit 1
+          }
+          Write-Host "Installer verified at $installerPath"
+
+      - name: Upload onefile artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AIUsageTray
+          name: AIUsageTray-onefile
           path: python/dist/AIUsageTray.exe
+
+      - name: Upload onedir artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIUsageTray-onedir
+          path: python/dist-onedir-final/AIUsageTray
 
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          files: python/dist/AIUsageTray.exe
+          files: |
+            python/dist/AIUsageTray.exe
+            Installer/AIUsageTray-Windows.exe
           generate_release_notes: true
+          fail_on_unmatched_files: true
