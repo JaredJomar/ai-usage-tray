@@ -41,6 +41,80 @@ jobs:
           cd python
           pyinstaller --name AIUsageTray --onedir --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --exclude-module brotlicffi --noconfirm --clean --distpath dist-onedir-final main.py
 
+      - name: Remove brotlicffi artifacts from onedir payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payloadDir = Join-Path $env:GITHUB_WORKSPACE 'python/dist-onedir-final/AIUsageTray'
+          if (-not (Test-Path -LiteralPath $payloadDir)) {
+            Write-Error "Payload directory not found: $payloadDir"
+            exit 1
+          }
+          $allMatches = Get-ChildItem -LiteralPath $payloadDir -Recurse -Force |
+            Where-Object {
+              $rel = $_.FullName.Substring($payloadDir.Length + 1)
+              $rel -like '*brotlicffi*' -or $_.Name -like '*brotlicffi*'
+            }
+          if ($allMatches) {
+            Write-Host "Removing brotlicffi artifacts:"
+            # Remove files first
+            $files = $allMatches | Where-Object { -not $_.PSIsContainer }
+            $files | ForEach-Object {
+              Write-Host "  File: $($_.FullName)"
+              Remove-Item -LiteralPath $_.FullName -Force
+            }
+            # Then remove directories deepest-first (longest path first)
+            $dirs = $allMatches | Where-Object { $_.PSIsContainer } | Sort-Object { $_.FullName.Length } -Descending
+            $dirs | ForEach-Object {
+              Write-Host "  Dir:  $($_.FullName)"
+              Remove-Item -LiteralPath $_.FullName -Recurse -Force
+            }
+          }
+          $remaining = Get-ChildItem -LiteralPath $payloadDir -Recurse -Force |
+            Where-Object {
+              $rel = $_.FullName.Substring($payloadDir.Length + 1)
+              $rel -like '*brotlicffi*' -or $_.Name -like '*brotlicffi*'
+            }
+          if ($remaining) {
+            Write-Error "FAIL: brotlicffi paths still present after cleanup:"
+            $remaining | ForEach-Object { Write-Error "  $($_.FullName)" }
+            exit 1
+          }
+          # Assert at least one valid _brotli*.pyd exists
+          $brotliFiles = Get-ChildItem -LiteralPath $payloadDir -Recurse -Force -Filter '_brotli*.pyd'
+          if (-not $brotliFiles) {
+            Write-Error "FAIL: No _brotli*.pyd extension found in payload after cleanup."
+            exit 1
+          }
+          Write-Host "SUCCESS: No brotlicffi paths remain; found $($brotliFiles.Count) _brotli*.pyd file(s)."
+
+      - name: Smoke-test frozen executable startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payloadDir = Join-Path $env:GITHUB_WORKSPACE 'python/dist-onedir-final/AIUsageTray'
+          $exePath = Join-Path $payloadDir 'AIUsageTray.exe'
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+            Write-Error "Executable not found at $exePath"
+            exit 1
+          }
+          Write-Host "Launching $exePath for smoke test..."
+          $proc = Start-Process -FilePath $exePath -WorkingDirectory $payloadDir -PassThru
+          try {
+            $waited = $proc.WaitForExit(10000)
+            if ($waited) {
+              Write-Error "FAIL: Process exited during smoke test with exit code $($proc.ExitCode)"
+              exit 1
+            }
+            Write-Host "SUCCESS: Process remained alive for 10s (PID $($proc.Id))."
+          }
+          finally {
+            if (-not $proc.HasExited) {
+              Write-Host "Terminating smoke-test process (PID $($proc.Id))..."
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
       - name: Locate or install Inno Setup (ISCC)
         id: iscc
         shell: pwsh
@@ -68,6 +142,21 @@ jobs:
           }
           echo "ISCC_PATH=$installed" >> $env:GITHUB_OUTPUT
 
+      - name: Clean pre-existing installer artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installerPath = Join-Path $env:GITHUB_WORKSPACE 'Installer/AIUsageTray-Windows.exe'
+          if (Test-Path -LiteralPath $installerPath) {
+            Write-Host "Removing pre-existing installer at $installerPath"
+            Remove-Item -LiteralPath $installerPath -Force -Recurse
+          }
+          if (Test-Path -LiteralPath $installerPath) {
+            Write-Error "FAIL: Unable to remove pre-existing installer at $installerPath"
+            exit 1
+          }
+          Write-Host "Installer path cleared."
+
       - name: Compile Inno Setup installer
         shell: pwsh
         run: |
@@ -80,8 +169,8 @@ jobs:
       - name: Verify installer output
         shell: pwsh
         run: |
-          $installerPath = "Installer/AIUsageTray-Windows.exe"
-          if (-not (Test-Path $installerPath)) {
+          $installerPath = Join-Path $env:GITHUB_WORKSPACE 'Installer/AIUsageTray-Windows.exe'
+          if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
             Write-Error "Installer not found at $installerPath"
             exit 1
           }
