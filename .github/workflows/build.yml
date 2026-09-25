@@ -28,6 +28,10 @@ jobs:
           pip install pytest
           pip install pyinstaller
 
+      - name: Verify Brotli module compatibility
+        run: |
+          python -c "import urllib3.response; import sys; brotli_mod = getattr(urllib3.response, 'brotli', None); assert brotli_mod is not None and hasattr(brotli_mod, 'error'), brotli_mod; print('SUCCESS: urllib3.response uses {}'.format(brotli_mod.__name__))"
+
       - name: Run tests
         working-directory: python
         run: python -m pytest tests -q
@@ -35,7 +39,7 @@ jobs:
       - name: Build onedir payload
         run: |
           cd python
-          pyinstaller --name AIUsageTray --onedir --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --noconfirm --clean --distpath dist-onedir-final main.py
+          pyinstaller --name AIUsageTray --onedir --windowed --icon icon.ico --collect-submodules providers --collect-all PyQt6 --hidden-import dashboard --hidden-import local_codex --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --hidden-import PIL.ImageFont --hidden-import PyQt6 --hidden-import PyQt6.sip --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import requests --hidden-import winreg --exclude-module brotlicffi --noconfirm --clean --distpath dist-onedir-final main.py
 
       - name: Locate or install Inno Setup (ISCC)
         id: iscc

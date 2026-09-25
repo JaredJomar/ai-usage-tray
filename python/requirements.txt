@@ -3,3 +3,4 @@ Pillow>=10.0.0
 requests>=2.31.0
 certifi>=2023.7.22
 PyQt6>=6.5.0
+brotli>=1.2.0
