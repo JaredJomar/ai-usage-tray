@@ -115,6 +115,24 @@ jobs:
             }
           }
 
+      - name: Verify frozen runtime Brotli compatibility
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payloadDir = Join-Path $env:GITHUB_WORKSPACE 'python/dist-onedir-final/AIUsageTray'
+          $exePath = Join-Path $payloadDir 'AIUsageTray.exe'
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+            Write-Error "Executable not found at $exePath"
+            exit 1
+          }
+          Write-Host "Running frozen runtime Brotli check via $exePath --brotli-check..."
+          $proc = Start-Process -FilePath $exePath -ArgumentList '--brotli-check' -WorkingDirectory $payloadDir -PassThru -Wait
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "FAIL: Frozen runtime Brotli check failed with exit code $($proc.ExitCode)"
+            exit 1
+          }
+          Write-Host "SUCCESS: Frozen runtime Brotli validation passed."
+
       - name: Locate or install Inno Setup (ISCC)
         id: iscc
         shell: pwsh

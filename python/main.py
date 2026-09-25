@@ -11,8 +11,20 @@ from pathlib import Path
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Prevent urllib3 2.8.0 from binding brotlicffi (namespace package without .error)
+# which crashes at urllib3.response.py:477. Force use of google brotli instead.
+sys.modules['brotlicffi'] = None
+
 from config import load_config
 from logger import Logger
+
+# --brotli-check: diagnostic path for CI to verify frozen runtime uses google brotli
+if "--brotli-check" in sys.argv:
+    import urllib3.response
+    brotli_mod = getattr(urllib3.response, 'brotli', None)
+    if brotli_mod is None or brotli_mod.__name__ != 'brotli' or not hasattr(brotli_mod, 'error'):
+        sys.exit(1)
+    sys.exit(0)
 
 
 _instance_mutex = None
