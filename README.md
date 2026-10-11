@@ -124,8 +124,8 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
 
 ## Releases
 
-v1.0.8 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.8/AIUsageTray-Windows.exe)
-from the [v1.0.8 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.8).
+v1.0.9 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.9/AIUsageTray-Windows.exe)
+from the [v1.0.9 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.9).
 Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API

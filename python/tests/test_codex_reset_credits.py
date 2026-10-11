@@ -1,7 +1,9 @@
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import providers.codex as codex_module
+from cache import CacheEntry
 from providers.codex import CodexProvider
 
 
@@ -12,6 +14,11 @@ class MemoryCache:
 
     def get_cached(self, provider):
         return self.cached
+
+    def get_entry(self, provider):
+        if self.cached is None:
+            return None
+        return CacheEntry(dict(self.cached), time.time() - 3600, False)
 
     def save(self, provider, data):
         self.saved = data

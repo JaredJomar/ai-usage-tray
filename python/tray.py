@@ -10,6 +10,7 @@ import time
 import webbrowser
 import winreg
 from datetime import datetime, timezone, timedelta
+from math import isfinite
 from pathlib import Path
 from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
@@ -17,7 +18,14 @@ import pystray
 
 from config import AppConfig, load_config, save_config
 from cache import CacheManager
-from providers.codex import CodexProvider
+from providers.codex import (
+    CodexProvider,
+    FetchResult,
+    STATUS_API_ERROR,
+    STATUS_AUTH_REQUIRED,
+    STATUS_FRESH,
+    STATUS_STALE,
+)
 from logger import Logger
 from auth import AuthManager
 
@@ -26,6 +34,13 @@ APP_NAME = "AIUsageTray"
 
 
 class TrayManager:
+    TOOLTIP_MAX_LENGTH = 127
+    STATUS_TICK_SECONDS = 30
+
+    _codex_data: Optional[dict] = None
+    _refreshing: bool = False
+    _last_fetch: Optional[FetchResult] = None
+
     def __init__(self, config: AppConfig):
         self._config = config
         self._cache = CacheManager(config.cache_ttl_seconds)
@@ -33,9 +48,12 @@ class TrayManager:
         self._auth = AuthManager()
         
         self._codex_data: Optional[dict] = None
+        self._refreshing = False
+        self._last_fetch: Optional[FetchResult] = None
         self._last_notify_time = datetime.min
         self._credit_alerts_sent: set[tuple[str, str, int]] = set()
         self._credit_alert_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
         self._window_launch_lock = threading.Lock()
         self._last_dashboard_launch = 0.0
         
@@ -116,27 +134,93 @@ class TrayManager:
         self._tray_icon.run()
     
     def _refresh_loop(self):
+        next_refresh = time.monotonic() + self._config.refresh_interval_seconds
         while self._running:
-            time.sleep(self._config.refresh_interval_seconds)
-            if self._running:
-                self._refresh_usage()
-    
+            time.sleep(self.STATUS_TICK_SECONDS)
+            if not self._running:
+                break
+            try:
+                if time.monotonic() >= next_refresh:
+                    self._refresh_usage()
+                    next_refresh = time.monotonic() + self._config.refresh_interval_seconds
+                else:
+                    self._update_status_display()
+            except Exception as error:
+                Logger.error("tray", "Refresh loop tick failed: {}".format(error))
+
+    def _ensure_refresh_lock(self) -> threading.Lock:
+        lock = getattr(self, "_refresh_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._refresh_lock = lock
+        return lock
+
     def _refresh_usage(self):
+        lock = self._ensure_refresh_lock()
+        if not lock.acquire(blocking=False):
+            Logger.info("tray", "Usage refresh already in flight; skipping")
+            return
+        try:
+            self._run_refresh()
+        finally:
+            lock.release()
+
+    def _run_refresh(self):
+        succeeded = False
+        result: Optional[FetchResult] = None
+        self._refreshing = True
         try:
             Logger.info("main", "Refreshing usage data...")
-            
-            if self._config.codex_enabled:
-                self._codex_data = self._codex.fetch()
-            
-            self._update_icon()
             self._update_tooltip()
-            
-            if self._config.notifications_enabled:
-                self._check_notifications()
-            
-            Logger.info("main", "Usage data refreshed successfully")
+
+            if self._config.codex_enabled:
+                result = self._normalize_failed_result(self._codex.fetch_result())
+                self._last_fetch = result
+                succeeded = result.status == STATUS_FRESH
+                if result.usage is not None:
+                    self._codex_data = result.usage
+
+            if succeeded:
+                Logger.info("main", "Usage data refreshed successfully")
+            else:
+                Logger.info("main", "Usage refresh finished without new data")
         except Exception as e:
             Logger.error("main", "Failed to refresh: {}".format(e))
+            self._last_fetch = self._failure_result("Unexpected error: {}".format(e))
+            succeeded = False
+        finally:
+            self._refreshing = False
+            self._update_icon()
+            self._update_tooltip()
+            if succeeded and self._config.notifications_enabled:
+                self._check_notifications()
+
+    def _failure_result(self, detail: str) -> FetchResult:
+        """Build a fetch result for an unexpected refresh exception."""
+        if self._codex_data:
+            last_success = self._last_fetch.last_success if self._last_fetch else None
+            return FetchResult(STATUS_STALE, self._codex_data, last_success, detail)
+        return FetchResult(STATUS_API_ERROR, None, None, detail)
+
+    def _normalize_failed_result(self, result: FetchResult) -> FetchResult:
+        """Attach prior in-memory quota to a failed result that carries none."""
+        if result.usage is not None or not self._codex_data:
+            return result
+        last_success = self._last_fetch.last_success if self._last_fetch else None
+        if result.status == STATUS_AUTH_REQUIRED:
+            return FetchResult(STATUS_AUTH_REQUIRED, self._codex_data, last_success, result.detail)
+        return FetchResult(STATUS_STALE, self._codex_data, last_success, result.detail)
+
+    def _update_status_display(self):
+        """Advance the tooltip's status age without performing a network fetch."""
+        if self._last_fetch is None and not self._codex_data:
+            return
+        if getattr(self, "_tray_icon", None) is None:
+            return
+        try:
+            self._update_tooltip()
+        except Exception as error:
+            Logger.error("tray", "Status update failed: {}".format(error))
     
     def _update_icon(self):
         max_usage = self._get_max_usage()
@@ -153,11 +237,15 @@ class TrayManager:
     
     def _update_tooltip(self):
         tooltip = self._build_tooltip()
-        self._tray_icon.title = tooltip[:127]
+        self._tray_icon.title = tooltip[:self.TOOLTIP_MAX_LENGTH]
     
     def _build_tooltip(self) -> str:
         if not self._codex_data:
-            return "Codex Usage\nNo data\nRight-click > Login"
+            if self._is_auth_required():
+                hint = "Right-click > Login"
+            else:
+                hint = "Right-click > Refresh Now"
+            return "Codex Usage\n{}\nNo data\n{}".format(self._status_line(), hint)
 
         h5 = int(self._codex_data["five_hour"])
         h7 = int(self._codex_data["seven_day"])
@@ -165,15 +253,83 @@ class TrayManager:
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
         credits = self._codex_data.get("reset_credits", 0)
         nearest_credit_expiry = self._nearest_credit_expiry()
-        credit_summary = "RESETS: {}".format(credits)
+        full_credit = "RESETS: {}".format(credits)
         if nearest_credit_expiry:
-            credit_summary += " | expires {}".format(self._format_countdown(nearest_credit_expiry))
+            full_credit += " | expires {}".format(self._format_countdown(nearest_credit_expiry))
+        trimmed_credit = "RESETS: {}".format(credits)
 
-        return "CODEX USAGE\n{}\n{}\n{}".format(
-            self._format_usage_row("5h", h5, r5),
-            self._format_usage_row("7d", h7, r7),
-            credit_summary,
-        )
+        header = "CODEX USAGE"
+        row_5h = self._format_usage_row("5h", h5, r5)
+        row_7d = self._format_usage_row("7d", h7, r7)
+
+        variants = self._status_variants()
+        credit_lines = [full_credit]
+        if trimmed_credit != full_credit:
+            credit_lines.append(trimmed_credit)
+
+        for credit_line in credit_lines:
+            for status in variants:
+                candidate = "\n".join([header, row_5h, row_7d, credit_line, status])
+                if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
+                    return candidate
+
+        # Last resort: lead with the shortest status so truncation cannot cut it.
+        return "\n".join([variants[-1], header, row_5h, row_7d])[:self.TOOLTIP_MAX_LENGTH]
+
+    def _status_variants(self) -> list[str]:
+        """Status strings richest-first so trimming never loses the most useful form."""
+        variants = [self._status_line()]
+        compact = self._status_line(compact=True)
+        if compact != variants[0]:
+            variants.append(compact)
+        return variants
+
+    def _status_line(self, compact: bool = False) -> str:
+        """Concise refresh status plus last-success age for the tooltip."""
+        if self._refreshing:
+            return "Refreshing…"
+        result = self._last_fetch
+        if result is None:
+            return "Loading…"
+        age = self._format_age(result.last_success)
+        if result.status == STATUS_FRESH:
+            return "Updated {}".format(age) if age else "Updated"
+        if result.status == STATUS_STALE:
+            return "Stale · {}".format(age) if age else "Stale"
+        if result.status == STATUS_AUTH_REQUIRED:
+            if age and not compact:
+                return "Login required · {}".format(age)
+            return "Login required"
+        if result.status == STATUS_API_ERROR:
+            return "Refresh failed"
+        return "Unavailable"
+
+    def _is_auth_required(self) -> bool:
+        if self._refreshing:
+            return False
+        result = self._last_fetch
+        return result is not None and result.status == STATUS_AUTH_REQUIRED
+
+    @staticmethod
+    def _format_age(timestamp: Optional[float]) -> Optional[str]:
+        if timestamp is None:
+            return None
+        try:
+            age = time.time() - timestamp
+        except (TypeError, ValueError):
+            return None
+        if not isfinite(age):
+            return None
+        seconds = max(0, int(age))
+        if seconds < 60:
+            return "now"
+        minutes = seconds // 60
+        if minutes < 60:
+            return "{}m ago".format(minutes)
+        hours = minutes // 60
+        if hours < 24:
+            return "{}h ago".format(hours)
+        return "{}d ago".format(hours // 24)
 
     def _format_usage_row(self, period: str, percentage: int, reset: str) -> str:
         return "{:<2} | [{}] | {:>3}% | reset {}".format(

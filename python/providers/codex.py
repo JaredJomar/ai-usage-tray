@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
 import requests
@@ -8,67 +9,129 @@ from typing import Optional
 from config import get_ca_bundle_path, get_codex_auth_path
 from logger import Logger
 
+STATUS_FRESH = "fresh"
+STATUS_STALE = "stale"
+STATUS_AUTH_REQUIRED = "auth_required"
+STATUS_API_ERROR = "api_error"
+STATUS_UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """Outcome of one quota fetch attempt for display-safe UI status.
+
+    ``status`` classifies the attempt; ``usage`` carries current data on
+    success and any retained prior quota data after a failed refresh;
+    ``last_success`` is the epoch time of the last successful quota fetch.
+    """
+
+    status: str
+    usage: Optional[dict] = None
+    last_success: Optional[float] = None
+    detail: str = ""
+
 
 class CodexProvider:
     API_URL = "https://chatgpt.com/backend-api/wham/usage"
     RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
     USER_AGENT = "codex_cli_rs"
+    USABLE_USAGE_KEYS = ("five_hour", "five_hour_reset", "seven_day", "seven_day_reset")
 
     def __init__(self, cache):
         self._cache = cache
 
     def fetch(self) -> Optional[dict]:
-        cached = self._cache.get_cached("codex")
-        if cached is not None and "reset_credit_expiries" in cached:
-            return cached
+        """Backward-compatible fetch returning usage data or None."""
+        return self.fetch_result().usage
+
+    def fetch_result(self) -> FetchResult:
+        """Fetch quota data and classify the outcome for UI consumers."""
+        entry = self._cache.get_entry("codex")
+        if entry is not None and entry.fresh and "reset_credit_expiries" in entry.data:
+            return FetchResult(STATUS_FRESH, entry.data, entry.saved_at, "Served from cache")
 
         auth_path = get_codex_auth_path()
         if not auth_path.exists():
             Logger.warn("codex", "Auth file not found: {}".format(auth_path))
-            return None
+            return self._fallback(STATUS_AUTH_REQUIRED, "Not logged in")
 
         try:
             with open(auth_path, "r") as f:
                 auth = json.load(f)
+        except Exception as e:
+            Logger.error("codex", "Failed to read auth file: {}".format(e))
+            return self._fallback(STATUS_AUTH_REQUIRED, "Login details unreadable")
 
-            access_token = auth.get("tokens", {}).get("access_token")
-            if not access_token:
-                Logger.warn("codex", "No access token found")
-                return None
+        tokens = auth.get("tokens") if isinstance(auth, dict) else None
+        if not isinstance(tokens, dict):
+            Logger.warn("codex", "Auth file tokens malformed")
+            return self._fallback(STATUS_AUTH_REQUIRED, "Login details unreadable")
+        access_token = tokens.get("access_token")
+        if not access_token:
+            Logger.warn("codex", "No access token found")
+            return self._fallback(STATUS_AUTH_REQUIRED, "No access token")
 
-            headers = {
-                "Authorization": "Bearer {}".format(access_token),
-                "User-Agent": self.USER_AGENT,
-            }
+        headers = {
+            "Authorization": "Bearer {}".format(access_token),
+            "User-Agent": self.USER_AGENT,
+        }
+        try:
             resp = requests.get(
                 self.API_URL,
                 headers=headers,
                 timeout=15,
                 verify=get_ca_bundle_path() or True,
             )
-
-            if resp.status_code == 401:
-                Logger.warn("codex", "Token expired, attempting refresh")
-                if self._refresh_token(auth, auth_path):
-                    return self.fetch()
-                return None
-
-            if resp.status_code != 200:
-                Logger.error("codex", "API returned HTTP {}".format(resp.status_code))
-                return None
-
-            data = resp.json()
-            usage = self._parse_usage(data)
-            if usage:
-                expiries = self._fetch_reset_credit_expiries(headers)
-                usage["reset_credit_expiries"] = expiries
-                usage["reset_credits_expires_at"] = expiries[0]["expires_at"] if expiries else None
-                self._cache.save("codex", usage)
-            return usage
-
         except Exception as e:
             Logger.error("codex", "Failed to fetch: {}".format(e))
-            return None
+            return self._fallback(STATUS_API_ERROR, "Network error")
+
+        if resp.status_code == 401:
+            Logger.warn("codex", "Token expired, attempting refresh")
+            if self._refresh_token(auth, auth_path):
+                return self.fetch_result()
+            return self._fallback(STATUS_AUTH_REQUIRED, "Session expired")
+
+        if resp.status_code != 200:
+            Logger.error("codex", "API returned HTTP {}".format(resp.status_code))
+            return self._fallback(STATUS_API_ERROR, "API returned HTTP {}".format(resp.status_code))
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            Logger.error("codex", "Failed to parse response: {}".format(e))
+            return self._fallback(STATUS_UNAVAILABLE, "Unexpected API response")
+
+        usage = self._parse_usage(data)
+        if not usage:
+            return self._fallback(STATUS_UNAVAILABLE, "Unexpected API response")
+
+        expiries = self._fetch_reset_credit_expiries(headers)
+        usage["reset_credit_expiries"] = expiries
+        usage["reset_credits_expires_at"] = expiries[0]["expires_at"] if expiries else None
+        # Cache persistence is best-effort: a failed save must not erase
+        # valid fetched data or escape as an exception.
+        try:
+            self._cache.save("codex", usage)
+        except Exception as e:
+            Logger.error("codex", "Failed to persist cache: {}".format(e))
+        return FetchResult(STATUS_FRESH, usage, time.time(), "Updated from API")
+
+    def _fallback(self, status: str, detail: str) -> FetchResult:
+        """Attach prior cached quota data to a failed refresh when usable."""
+        entry = self._cache.get_entry("codex")
+        if entry is not None and self._is_usable(entry.data):
+            # API/network failures surface as stale data; a confirmed
+            # authentication failure keeps its own status for the UI.
+            if status in (STATUS_API_ERROR, STATUS_UNAVAILABLE):
+                status = STATUS_STALE
+            return FetchResult(status, entry.data, entry.saved_at, detail)
+        return FetchResult(status, None, None, detail)
+
+    @classmethod
+    def _is_usable(cls, data: dict) -> bool:
+        """Whether cached quota data has every field the UI renders directly."""
+        return all(key in data for key in cls.USABLE_USAGE_KEYS)
 
     def _fetch_reset_credit_expiries(self, headers: dict) -> list[dict[str, str]]:
         try:

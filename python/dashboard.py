@@ -24,7 +24,15 @@ from local_codex import (
     record_usage_snapshot,
 )
 from logger import Logger
-from providers.codex import CodexProvider
+from providers.codex import (
+    CodexProvider,
+    FetchResult,
+    STATUS_API_ERROR,
+    STATUS_AUTH_REQUIRED,
+    STATUS_FRESH,
+    STATUS_STALE,
+    STATUS_UNAVAILABLE,
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,8 @@ class DashboardState:
     model_rows: tuple[tuple[str, str], ...]
     local_observation: str
     usage_history: tuple[UsageSnapshot, ...]
+    refresh_status: str = "Not available"
+    refresh_detail: str = ""
 
 
 class DashboardTheme:
@@ -353,6 +363,39 @@ def _parse_model_updated_at(value: object) -> Optional[datetime]:
         return None
 
 
+def _format_epoch_age(timestamp: Optional[float], now: Optional[datetime] = None) -> str:
+    if timestamp is None:
+        return "unknown"
+    try:
+        iso = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "unknown"
+    return _format_relative_time(iso, now)
+
+
+def _refresh_status_text(
+    result: Optional[FetchResult], usage: Optional[dict],
+    now: Optional[datetime] = None,
+) -> tuple[str, str]:
+    """Map a fetch outcome to a display-safe status line plus supporting detail."""
+    if result is None:
+        if usage:
+            return "Current limits loaded", ""
+        return "Current limits unavailable; local metadata shown", ""
+    age = _format_epoch_age(result.last_success, now)
+    if result.status == STATUS_FRESH:
+        return "Current limits updated {}".format(age), result.detail
+    if result.status == STATUS_STALE:
+        return "Refresh failed · showing limits from {}".format(age), result.detail
+    if result.status == STATUS_AUTH_REQUIRED:
+        if result.usage is not None:
+            return "Login required · showing limits from {}".format(age), result.detail
+        return "Login required to refresh limits", result.detail
+    if result.status == STATUS_API_ERROR:
+        return "Refresh failed: {}".format(result.detail or "network error"), result.detail
+    return "Current limits unavailable; local metadata shown", result.detail
+
+
 def _nearest_credit_expiry(api_data: dict) -> Optional[object]:
     direct_expiry = api_data.get("reset_credits_expires_at")
     if direct_expiry:
@@ -447,6 +490,7 @@ def build_dashboard_state(
     usage: Optional[dict], local: LocalCodexSnapshot,
     now: Optional[datetime] = None,
     history: tuple[UsageSnapshot, ...] = (),
+    result: Optional[FetchResult] = None,
 ) -> DashboardState:
     """Create display-safe strings without inventing unavailable metrics."""
     api_data = usage or {}
@@ -473,6 +517,7 @@ def build_dashboard_state(
     observed = "No local limit observation available"
     if local.observed_primary or local.observed_secondary:
         observed = "Local rate-limit observation available (not used for live limits)"
+    refresh_status, refresh_detail = _refresh_status_text(result, usage, now)
     return DashboardState(
         five_hour=_format_usage(five_hour),
         five_hour_reset=_format_countdown(api_data.get("five_hour_reset"), now),
@@ -489,11 +534,13 @@ def build_dashboard_state(
         model_rows=tuple(model_rows),
         local_observation=observed,
         usage_history=history,
+        refresh_status=refresh_status,
+        refresh_detail=refresh_detail,
     )
 
 
 class DashboardRefreshWorker(QThread):
-    refreshed = pyqtSignal(object, object)
+    refreshed = pyqtSignal(object, object, object)
 
     def __init__(self, config: AppConfig):
         super().__init__()
@@ -503,19 +550,27 @@ class DashboardRefreshWorker(QThread):
         try:
             local = read_local_codex_snapshot()
             usage = None
+            result = None
             if self._config.codex_enabled:
                 cache = CacheManager(self._config.cache_ttl_seconds)
                 cached = cache.get_cached("codex")
-                usage = CodexProvider(cache).fetch()
-                if cached is None:
+                result = CodexProvider(cache).fetch_result()
+                usage = result.usage
+                if cached is None and result.status == STATUS_FRESH:
                     record_usage_snapshot(usage, local)
-            self.refreshed.emit(usage, local)
+            self.refreshed.emit(usage, local, result)
         except Exception as error:
             Logger.error("dashboard", "Refresh failed: {}".format(error))
-            self.refreshed.emit(None, LocalCodexSnapshot())
+            self.refreshed.emit(
+                None,
+                LocalCodexSnapshot(),
+                FetchResult(STATUS_API_ERROR, None, None, "Unexpected error"),
+            )
 
 
 class DashboardWindow(QWidget):
+    STATUS_TICK_MS = 30000
+
     def __init__(self, config: AppConfig, anchor: Optional[QPoint] = None):
         super().__init__()
         self._config = config
@@ -524,8 +579,15 @@ class DashboardWindow(QWidget):
         self._closing = False
         self._refresh_scheduled = False
         self._last_state: Optional[DashboardState] = None
+        self._last_usage: Optional[dict] = None
+        self._last_success: Optional[float] = None
+        self._rendered_result: Optional[FetchResult] = None
         self._period_days: Optional[int] = 7
         self._init_ui()
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(self.STATUS_TICK_MS)
+        self._status_timer.timeout.connect(self._update_status_display)
+        self._status_timer.start()
         # Defer initial refresh until event loop is running (queued after startup)
         QTimer.singleShot(0, self._schedule_initial_refresh)
 
@@ -565,6 +627,7 @@ class DashboardWindow(QWidget):
         self._title = title
         title_block.addWidget(title)
         self._status = QLabel("Refreshing current limits…", objectName="subtitle")
+        self._status.setWordWrap(True)
         title_block.addWidget(self._status)
         header.addLayout(title_block)
         header.addStretch()
@@ -954,6 +1017,7 @@ class DashboardWindow(QWidget):
             return
         self._refresh_button.setEnabled(False)
         self._status.setText("Refreshing current limits…")
+        self._status.setToolTip("")
         self._worker = DashboardRefreshWorker(self._config)
         self._worker.refreshed.connect(self._render)
         self._worker.finished.connect(self._refresh_finished)
@@ -967,8 +1031,24 @@ class DashboardWindow(QWidget):
             if application:
                 application.quit()
 
-    def _render(self, usage: Optional[dict], local: LocalCodexSnapshot) -> None:
-        state = build_dashboard_state(usage, local, history=tuple(read_usage_snapshots()))
+    def _render(
+        self, usage: Optional[dict], local: LocalCodexSnapshot,
+        result: Optional[FetchResult] = None,
+    ) -> None:
+        if result is not None and usage is None and self._last_usage is not None:
+            usage = self._last_usage
+            if result.status in (STATUS_API_ERROR, STATUS_UNAVAILABLE):
+                result = FetchResult(STATUS_STALE, usage, self._last_success, result.detail)
+            elif result.status == STATUS_AUTH_REQUIRED:
+                result = FetchResult(STATUS_AUTH_REQUIRED, usage, self._last_success, result.detail)
+        if usage is not None:
+            self._last_usage = usage
+            if result is not None and result.last_success is not None:
+                self._last_success = result.last_success
+        self._rendered_result = result
+        state = build_dashboard_state(
+            usage, local, history=tuple(read_usage_snapshots()), result=result,
+        )
         self._last_state = state
         for parts, used_text, reset_text in (
             (self._five_balance, state.five_hour, "Resets: {}".format(state.five_hour_reset)),
@@ -988,7 +1068,8 @@ class DashboardWindow(QWidget):
         self._last_update.setText("Last local update: {}".format(state.last_update))
         self._observation.setText(state.local_observation)
         self._update_history()
-        self._status.setText("Current limits loaded" if usage else "Current limits unavailable; local metadata shown")
+        self._status.setText(state.refresh_status)
+        self._status.setToolTip(state.refresh_detail or state.refresh_status)
         while self._model_list.count():
             child = self._model_list.takeAt(0)
             if child.widget():
@@ -1016,6 +1097,16 @@ class DashboardWindow(QWidget):
             detail_label.setWordWrap(True)
             row.addWidget(detail_label)
             self._model_list.addWidget(row_widget)
+
+    def _update_status_display(self) -> None:
+        """Refresh only the subtitle from the last fetch result without a network call."""
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if self._rendered_result is None and self._last_usage is None:
+            return
+        status, detail = _refresh_status_text(self._rendered_result, self._last_usage)
+        self._status.setText(status)
+        self._status.setToolTip(detail or status)
 
     def _update_history(self) -> None:
         """Refresh the History card from local snapshots using the selected period."""
