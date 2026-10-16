@@ -9,7 +9,7 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
   - 🟠 Orange: 60-84%
   - 🔴 Red: 85%+
 - **Tooltip with compact progress bars** and reset countdowns
-- **Browser-based OAuth**, PKCE flow matching Codex CLI (no device codes)
+- **Browser-based OAuth** with PKCE (no device codes)
 - **Codex Usage dashboard** with live usage display (5h hourly + 7d weekly windows)
 - **Use reset** action that opens Codex beside the remaining reset credits
 - **Show Sections toggles** for Balance, Credits, Usage breakdown, Local activity, and History
@@ -25,39 +25,19 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 
 ### Tray tooltip
 
-```
-CODEX USAGE
-5h | [#####-] |  86% | reset 3h 8m
-7d | [##----] |  34% | reset 5d 1h
-RESETS: 1 | expires 42m
-```
+![AI Usage Tray tooltip](img/tray-tooltip.png)
 
 The tray icon is green below 60%, orange from 60% through 84%, and red at
 85% or higher. Reset-credit notifications appear one hour and fifteen minutes
 before the nearest available credit expires.
 
-### Dashboard
+### Dashboard — dark mode
 
-```text
-┌────────────────────────────────────────────┐
-│ CODEX • LIVE LIMITS    Usage dashboard  X  │
-│ Current limits loaded               Refresh│
-│                                            │
-│ 5-HOUR WINDOW       86%   WEEKLY WINDOW 34%│
-│ Resets: 3h 8m             Resets: 5d 1h    │
-│                                            │
-│ Plan: ChatGPT Plus                         │
-│ Reset credits: 1                           │
-│ Next reset credit expiry: 42m              │
-│                                            │
-│ Local activity                             │
-│ LAST 24 HOURS  3  LAST 7 DAYS  12  ALL  48 │
-│ Usage history: collecting snapshots…       │
-│                                            │
-│ Tokens & models                            │
-│ Tokens used (local aggregate): 12,345      │
-└────────────────────────────────────────────┘
-```
+![AI Usage Tray dashboard in dark mode](img/dashboard-dark.png)
+
+### Dashboard — light mode
+
+![AI Usage Tray dashboard in light mode](img/dashboard-light.png)
 
 The dashboard opens from the tray icon as Codex Usage and includes live limit cards, reset
 credit details, local session activity, usage history, and locally observed
@@ -82,7 +62,7 @@ python main.py
 3. Authenticate with your OpenAI account
 4. Token is saved to `~/.codex/auth.json`
 
-The app uses the same PKCE OAuth flow as the Codex CLI: authorization code with S256 code verifier, no device codes or API keys needed.
+The app uses a browser-based PKCE OAuth flow with an authorization code and S256 code verifier; no device codes or API keys are needed.
 
 ## Auto-Start
 
@@ -167,7 +147,6 @@ AI-Usage-Tray/
 ## Credits
 
 - Inspired by [Omarchy](https://omarchy.org/)'s AI usage widget
-- Codex OAuth flow based on [Codex CLI](https://github.com/openai/codex)
 
 ## License
 
