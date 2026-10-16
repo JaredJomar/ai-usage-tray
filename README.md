@@ -47,13 +47,39 @@ The settings (gear) panel offers Show Sections toggles for Balance, Credits,
 Usage breakdown, Local activity, and History. Group by Day averages
 usage snapshots per day and is shown only when History is visible.
 
+Local activity is collected read-only from Codex metadata under `~/.codex`,
+including the local `state_5.sqlite` database and eligible rollout JSONL files.
+The app uses aggregate session, token, model, and rate-limit metadata; it does
+not read prompts, messages, or history text. Local rate-limit values are
+observations from Codex files, while current usage is fetched from the Wham API.
+
 ## Quick Start
+
+For a source checkout, use Windows with Python 3.13 or a compatible Python 3
+installation. The automated Windows build currently uses Python 3.13.
 
 ```bash
 cd python
 pip install -r requirements.txt
 python main.py
 ```
+
+The application starts in the system tray. Use `python main.py --dashboard` to
+open the dashboard directly, or `python main.py --settings` to open Settings.
+
+## Testing and Packaging
+
+Run the test suite from the `python` directory:
+
+```bash
+python -m pytest tests -q
+```
+
+Pushing a `v*` tag or starting the GitHub Actions workflow manually runs the
+Windows build. The workflow tests the source, builds a PyInstaller onedir
+payload, smoke-tests the frozen executable, verifies its Brotli runtime, and
+compiles the Inno Setup installer. Tag builds attach
+`Installer/AIUsageTray-Windows.exe` to the release.
 
 ## Authentication
 
@@ -133,7 +159,9 @@ AI-Usage-Tray/
 │   ├── config.py            # Configuration management
 │   ├── auth.py              # PKCE browser OAuth + token refresh
 │   ├── tray.py              # Tray icon, tooltip, menu, auto-start
+│   ├── dashboard.py         # PyQt6 usage dashboard and local activity views
 │   ├── settings_window.py   # PyQt6 settings with live usage display
+│   ├── local_codex.py       # Read-only local Codex metadata and snapshots
 │   ├── cache.py             # TTL cache with atomic writes
 │   ├── logger.py            # File logging
 │   ├── providers/
