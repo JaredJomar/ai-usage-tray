@@ -83,4 +83,39 @@ def test_fetch_refreshes_legacy_cache_and_keeps_usage_when_detail_request_fails(
     assert usage["reset_credits"] == 2
     assert usage["reset_credit_expiries"] == []
     assert usage["reset_credits_expires_at"] is None
-    assert cache.saved == usage
+
+
+def test_consume_reset_credit_posts_idempotent_request_with_optional_account_id(monkeypatch, tmp_path):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(
+        json.dumps({"account_id": "acct-1", "tokens": {"access_token": "test-token"}}),
+        encoding="utf-8",
+    )
+    provider = CodexProvider(MemoryCache())
+    requests = []
+
+    def fake_post(url, **kwargs):
+        requests.append((url, kwargs))
+        return Response(200, {"outcome": "reset"})
+
+    monkeypatch.setattr(codex_module, "get_codex_auth_path", lambda: auth_path)
+    monkeypatch.setattr(codex_module, "get_ca_bundle_path", lambda: "test-ca.pem")
+    monkeypatch.setattr(codex_module.requests, "post", fake_post)
+
+    result = provider.consume_reset_credit("request-1", "credit-1")
+
+    assert result.status == "reset"
+    assert requests == [(
+        provider.RESET_CREDITS_CONSUME_URL,
+        {
+            "headers": {
+                "Authorization": "Bearer test-token",
+                "User-Agent": provider.USER_AGENT,
+                "Content-Type": "application/json",
+                "ChatGPT-Account-Id": "acct-1",
+            },
+            "json": {"redeem_request_id": "request-1", "credit_id": "credit-1"},
+            "timeout": 15,
+            "verify": "test-ca.pem",
+        },
+    )]

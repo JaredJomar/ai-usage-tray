@@ -31,9 +31,16 @@ class FetchResult:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class ResetConsumeResult:
+    status: str
+    detail: str
+
+
 class CodexProvider:
     API_URL = "https://chatgpt.com/backend-api/wham/usage"
     RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+    RESET_CREDITS_CONSUME_URL = RESET_CREDITS_URL + "/consume"
     USER_AGENT = "codex_cli_rs"
     USABLE_USAGE_KEYS = ("five_hour", "five_hour_reset", "seven_day", "seven_day_reset")
 
@@ -116,6 +123,53 @@ class CodexProvider:
         except Exception as e:
             Logger.error("codex", "Failed to persist cache: {}".format(e))
         return FetchResult(STATUS_FRESH, usage, time.time(), "Updated from API")
+
+    def consume_reset_credit(self, redeem_request_id: str, credit_id: Optional[str] = None) -> ResetConsumeResult:
+        auth_path = get_codex_auth_path()
+        try:
+            with open(auth_path, "r") as f:
+                auth = json.load(f)
+        except Exception as error:
+            Logger.error("codex", "Failed to read auth file for reset: {}".format(error))
+            return ResetConsumeResult("auth_required", "Login details unreadable")
+
+        tokens = auth.get("tokens") if isinstance(auth, dict) else None
+        access_token = tokens.get("access_token") if isinstance(tokens, dict) else None
+        if not access_token:
+            return ResetConsumeResult("auth_required", "No access token")
+
+        headers = {
+            "Authorization": "Bearer {}".format(access_token),
+            "User-Agent": self.USER_AGENT,
+            "Content-Type": "application/json",
+        }
+        account_id = auth.get("account_id") or (tokens.get("account_id") if isinstance(tokens, dict) else None)
+        if account_id:
+            headers["ChatGPT-Account-Id"] = str(account_id)
+        payload = {"redeem_request_id": redeem_request_id}
+        if credit_id:
+            payload["credit_id"] = credit_id
+        try:
+            response = requests.post(
+                self.RESET_CREDITS_CONSUME_URL,
+                headers=headers,
+                json=payload,
+                timeout=15,
+                verify=get_ca_bundle_path() or True,
+            )
+        except Exception as error:
+            Logger.error("codex", "Failed to consume reset credit: {}".format(error))
+            return ResetConsumeResult("network_error", "Network error")
+        if response.status_code == 401:
+            return ResetConsumeResult("auth_required", "Session expired")
+        if response.status_code != 200:
+            Logger.warn("codex", "Reset-credit consume failed (HTTP {})".format(response.status_code))
+            return ResetConsumeResult("api_error", "API returned HTTP {}".format(response.status_code))
+        try:
+            outcome = response.json().get("outcome", "reset")
+        except Exception:
+            outcome = "reset"
+        return ResetConsumeResult(str(outcome), "Reset request completed")
 
     def _fallback(self, status: str, detail: str) -> FetchResult:
         """Attach prior cached quota data to a failed refresh when usable."""

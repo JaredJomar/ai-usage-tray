@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sys
+import uuid
+import webbrowser
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -10,7 +12,7 @@ from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, QThread, Qt, pyqtSignal, 
 from PyQt6.QtGui import QColor, QCursor, QFontDatabase, QPainter, QPen, QResizeEvent
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QToolButton,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QToolButton,
     QVBoxLayout, QWidget,
 )
 
@@ -27,6 +29,7 @@ from logger import Logger
 from providers.codex import (
     CodexProvider,
     FetchResult,
+    ResetConsumeResult,
     STATUS_API_ERROR,
     STATUS_AUTH_REQUIRED,
     STATUS_FRESH,
@@ -34,6 +37,7 @@ from providers.codex import (
     STATUS_UNAVAILABLE,
 )
 
+CODEX_WEB_URL = "https://chatgpt.com/codex"
 
 @dataclass(frozen=True)
 class DashboardState:
@@ -568,6 +572,25 @@ class DashboardRefreshWorker(QThread):
             )
 
 
+class DashboardResetWorker(QThread):
+    consumed = pyqtSignal(object)
+
+    def __init__(self, config: AppConfig, request_id: str, credit_id: Optional[str] = None):
+        super().__init__()
+        self._config = config
+        self._request_id = request_id
+        self._credit_id = credit_id
+
+    def run(self) -> None:
+        try:
+            cache = CacheManager(self._config.cache_ttl_seconds)
+            result = CodexProvider(cache).consume_reset_credit(self._request_id, self._credit_id)
+        except Exception as error:
+            Logger.error("dashboard", "Reset consume failed: {}".format(error))
+            result = ResetConsumeResult("error", "Unexpected error")
+        self.consumed.emit(result)
+
+
 class DashboardWindow(QWidget):
     STATUS_TICK_MS = 30000
 
@@ -576,6 +599,7 @@ class DashboardWindow(QWidget):
         self._config = config
         self._anchor = anchor
         self._worker: Optional[DashboardRefreshWorker] = None
+        self._reset_worker: Optional[DashboardResetWorker] = None
         self._closing = False
         self._refresh_scheduled = False
         self._last_state: Optional[DashboardState] = None
@@ -598,7 +622,7 @@ class DashboardWindow(QWidget):
 
     def _init_ui(self) -> None:
         self.setObjectName("codexDashboard")
-        self.setWindowTitle("Codex Analytics")
+        self.setWindowTitle("Codex Usage")
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -621,13 +645,14 @@ class DashboardWindow(QWidget):
         header = QHBoxLayout()
         title_block = QVBoxLayout()
         title_block.setSpacing(DashboardTheme.SPACE_TIGHT)
-        title_block.addWidget(QLabel("CODEX • ANALYTICS", objectName="eyebrow"))
-        title = QLabel("Codex Analytics", objectName="title")
+        title_block.addWidget(QLabel("CODEX • LIVE LIMITS", objectName="eyebrow"))
+        title = QLabel("Codex Usage", objectName="title")
         title.setWordWrap(True)
         self._title = title
         title_block.addWidget(title)
         self._status = QLabel("Refreshing current limits…", objectName="subtitle")
         self._status.setWordWrap(True)
+        self._status.setVisible(False)
         title_block.addWidget(self._status)
         header.addLayout(title_block)
         header.addStretch()
@@ -657,19 +682,7 @@ class DashboardWindow(QWidget):
         tabs.setSpacing(DashboardTheme.SPACE_4)
         self._usage_tab = QToolButton(objectName="usageTab")
         self._usage_tab.setText("Usage")
-        self._usage_tab.setCheckable(True)
-        self._usage_tab.setChecked(True)
-        self._review_tab = QToolButton(objectName="reviewTab")
-        self._review_tab.setText("Code review")
-        self._review_tab.setCheckable(True)
-        tab_group = QButtonGroup(self)
-        tab_group.setExclusive(True)
-        tab_group.addButton(self._usage_tab)
-        tab_group.addButton(self._review_tab)
-        self._usage_tab.clicked.connect(lambda: self._show_usage_page(True))
-        self._review_tab.clicked.connect(lambda: self._show_usage_page(False))
         tabs.addWidget(self._usage_tab)
-        tabs.addWidget(self._review_tab)
         tabs.addStretch()
         root.addLayout(tabs)
 
@@ -685,7 +698,6 @@ class DashboardWindow(QWidget):
         settings_layout.addWidget(QLabel("SHOW SECTIONS", objectName="cardTitle"))
         self._section_checks: dict[str, QCheckBox] = {}
         for key, text, object_name in (
-            ("codex_analytics", "Codex Analytics", "codexAnalyticsSectionCheck"),
             ("balance", "Balance", "balanceSectionCheck"),
             ("credits", "Credits", "creditsSectionCheck"),
             ("usage_breakdown", "Usage breakdown", "usageBreakdownSectionCheck"),
@@ -782,7 +794,6 @@ class DashboardWindow(QWidget):
         usage.addStretch()
 
         self._section_widgets: dict[str, list[QWidget]] = {
-            "codex_analytics": [self._title],
             "balance": [balance_title, self._five_balance[0], self._weekly_balance[0]],
             "credits": [self._credits_card],
             "usage_breakdown": [breakdown_title, self._breakdown_card],
@@ -793,25 +804,6 @@ class DashboardWindow(QWidget):
             ],
         }
         self._apply_section_visibility(self._config.section_visibility)
-
-        self._review_page = QWidget(objectName="reviewPage")
-        self._review_page.setVisible(False)
-        content.addWidget(self._review_page)
-        review = QVBoxLayout(self._review_page)
-        review.setContentsMargins(DashboardTheme.NONE, DashboardTheme.NONE, DashboardTheme.NONE, DashboardTheme.NONE)
-        review.setSpacing(DashboardTheme.SPACE_2)
-        review.addWidget(QLabel("Code review", objectName="sectionTitle"))
-        review_notice = QLabel(
-            "Code review analytics are not available from local metadata.",
-            objectName="reviewNotice",
-        )
-        review_notice.setWordWrap(True)
-        review.addWidget(review_notice)
-        review.addStretch()
-
-    def _show_usage_page(self, show_usage: bool) -> None:
-        self._usage_page.setVisible(show_usage)
-        self._review_page.setVisible(not show_usage)
 
     def _select_period(self, days: int) -> None:
         self._period_days = days
@@ -840,7 +832,7 @@ class DashboardWindow(QWidget):
             QFrame#weeklyCard {{ background: {weekly_surface}; border: {border_width}px solid {weekly_border}; border-radius: {card_radius}px; }}
             QLabel#eyebrow {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; letter-spacing: {letter_spacing}px; }}
             QLabel#title {{ color: {text}; font-family: '{font_family}'; font-size: {font_title}px; font-weight: 700; }}
-            QLabel#subtitle, QLabel#muted, QLabel#reviewNotice {{ color: {muted}; font-size: {font_body}px; }}
+            QLabel#subtitle, QLabel#muted {{ color: {muted}; font-size: {font_body}px; }}
             QLabel#historyValue {{ color: {text}; font-size: {font_body}px; }}
             QLabel#cardTitle {{ color: {accent}; font-size: {font_eyebrow}px; font-weight: 700; }}
             QLabel#fiveRemainingValue, QLabel#weeklyRemainingValue {{ color: {bar_fill}; font-family: '{font_family}'; font-size: {font_usage}px; font-weight: 700; }}
@@ -851,9 +843,7 @@ class DashboardWindow(QWidget):
             QLabel#modelDetail {{ color: {muted}; font-size: {font_body}px; }}
             QProgressBar#fiveRemainingBar, QProgressBar#weeklyRemainingBar {{ background: {bar_track}; border: 0; border-radius: {bar_radius}px; min-height: {bar_height}px; max-height: {bar_height}px; text-visible: false; }}
             QProgressBar#fiveRemainingBar::chunk, QProgressBar#weeklyRemainingBar::chunk {{ background: {bar_fill}; border-radius: {bar_radius}px; }}
-            QToolButton#usageTab, QToolButton#reviewTab {{ background: transparent; color: {muted}; border: 0; border-bottom: 2px solid transparent; padding: {space_1}px {space_2}px; font-family: '{font_family}'; font-size: {font_tab}px; font-weight: 700; }}
-            QToolButton#usageTab:hover, QToolButton#reviewTab:hover {{ color: {text}; }}
-            QToolButton#usageTab:checked, QToolButton#reviewTab:checked {{ color: {text}; border-bottom-color: {accent}; }}
+            QToolButton#usageTab {{ background: transparent; color: {text}; border: 0; border-bottom: 2px solid {accent}; padding: {space_1}px {space_2}px; font-family: '{font_family}'; font-size: {font_tab}px; font-weight: 700; }}
             QToolButton#period7D, QToolButton#period1M, QToolButton#periodCustom, QToolButton#groupByDay {{ background: {segment_surface}; color: {muted}; border: {border_width}px solid {border}; border-radius: {control_radius}px; padding: 0 {space_3}px; min-height: {period_height}px; font-size: {font_tab}px; font-weight: 700; }}
             QToolButton#period7D:hover, QToolButton#period1M:hover, QToolButton#groupByDay:hover {{ color: {text}; }}
             QToolButton#period7D:checked, QToolButton#period1M:checked, QToolButton#groupByDay:checked {{ background: {accent}; color: {control_text}; border-color: {accent}; }}
@@ -866,7 +856,7 @@ class DashboardWindow(QWidget):
             QToolButton#settingsToggle {{ background: {surface}; color: {text}; border: {border_width}px solid {border}; border-radius: {control_radius}px; font-size: {font_section}px; min-width: {close_button_width}px; min-height: {button_height}px; }}
             QToolButton#settingsToggle:hover {{ background: {primary_surface}; border-color: {primary_border}; }}
             QToolButton#settingsToggle:checked {{ background: {accent}; color: {control_text}; border-color: {accent}; }}
-             QCheckBox#codexAnalyticsSectionCheck, QCheckBox#balanceSectionCheck, QCheckBox#creditsSectionCheck, QCheckBox#usageBreakdownSectionCheck, QCheckBox#localActivitySectionCheck, QCheckBox#historySectionCheck {{ background: transparent; color: {text}; font-family: '{font_family}'; font-size: {font_body}px; }}
+             QCheckBox#balanceSectionCheck, QCheckBox#creditsSectionCheck, QCheckBox#usageBreakdownSectionCheck, QCheckBox#localActivitySectionCheck, QCheckBox#historySectionCheck {{ background: transparent; color: {text}; font-family: '{font_family}'; font-size: {font_body}px; }}
             QToolButton#closeButton {{ color: {muted}; border: 0; border-radius: {control_radius}px; font-size: {font_close}px; min-width: {close_button_width}px; min-height: {button_height}px; }}
             QToolButton#closeButton:hover {{ background: {surface}; color: {text}; }}
         """.format(
@@ -961,13 +951,99 @@ class DashboardWindow(QWidget):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(DashboardTheme.SPACE_3, DashboardTheme.SPACE_3, DashboardTheme.SPACE_3, DashboardTheme.SPACE_3)
         layout.setSpacing(DashboardTheme.SPACE_1)
-        layout.addWidget(QLabel("CREDITS REMAINING", objectName="cardTitle"))
+        heading = QHBoxLayout()
+        heading.setSpacing(DashboardTheme.SPACE_2)
+        heading.addWidget(QLabel("CREDITS REMAINING", objectName="cardTitle"))
+        heading.addStretch()
+        self._use_reset_button = QToolButton(objectName="useResetButton")
+        self._use_reset_button.setText("Use reset")
+        self._use_reset_button.setEnabled(False)
+        self._use_reset_button.setToolTip("Open Codex to use a reset credit")
+        self._use_reset_button.setAccessibleName("Use reset credit")
+        self._use_reset_button.clicked.connect(self._confirm_reset)
+        heading.addWidget(self._use_reset_button)
+        layout.addLayout(heading)
         self._credits_value = QLabel("Not available", objectName="creditsValue")
         layout.addWidget(self._credits_value)
         self._credits_expiry = QLabel("Expires in: Not available", objectName="muted")
         self._credits_expiry.setWordWrap(True)
         layout.addWidget(self._credits_expiry)
         return frame
+
+    def _available_credit_id(self) -> Optional[str]:
+        entries = (self._last_usage or {}).get("reset_credit_expiries")
+        if not isinstance(entries, list) or not entries:
+            return None
+        first = entries[0]
+        if isinstance(first, dict) and first.get("id"):
+            return str(first["id"])
+        return None
+
+    @staticmethod
+    def _open_codex() -> None:
+        webbrowser.open(CODEX_WEB_URL)
+
+    def _render_reset_button_state(self) -> None:
+        usage = self._last_usage or {}
+        try:
+            weekly_used = float(usage.get("seven_day"))
+        except (TypeError, ValueError):
+            weekly_used = 0
+        credits = usage.get("reset_credits")
+        self._use_reset_button.setEnabled(
+            isinstance(credits, (int, float))
+            and not isinstance(credits, bool)
+            and credits > 0
+            and weekly_used >= 100
+        )
+
+    def _confirm_reset(self) -> None:
+        if not self._use_reset_button.isEnabled() or self._last_usage is None:
+            return
+        usage = self._last_usage
+        weekly = usage.get("seven_day")
+        expiry = _nearest_credit_expiry(usage) or "unknown"
+        message = (
+            "Your weekly quota is exhausted.\n\n"
+            "5-hour remaining: {}\n"
+            "Weekly remaining: {}\n"
+            "Reset credits available: {}\n"
+            "Nearest credit expiry: {}\n\n"
+            "Use one reset credit now?"
+        ).format(
+            _remaining_balance(_format_usage(usage.get("five_hour")))[0],
+            _remaining_balance(_format_usage(weekly))[0],
+            usage.get("reset_credits"),
+            expiry,
+        )
+        answer = QMessageBox.question(
+            self,
+            "Confirm reset credit",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._use_reset_button.setEnabled(False)
+        self._status.setText("Using reset credit…")
+        self._reset_worker = DashboardResetWorker(
+            self._config,
+            str(uuid.uuid4()),
+            self._available_credit_id(),
+        )
+        self._reset_worker.consumed.connect(self._reset_finished)
+        self._reset_worker.finished.connect(self._reset_worker.deleteLater)
+        self._reset_worker.start()
+
+    def _reset_finished(self, result: ResetConsumeResult) -> None:
+        self._reset_worker = None
+        if result.status in ("reset", "alreadyRedeemed"):
+            self._status.setText("Reset credit used; refreshing limits…")
+            self.refresh()
+            return
+        self._status.setText("Reset credit not used: {}".format(result.detail))
+        self._render_reset_button_state()
 
     def _make_history_card(self) -> QFrame:
         frame = QFrame(objectName="usageCard")
@@ -1060,6 +1136,7 @@ class DashboardWindow(QWidget):
             parts[3].setText(reset_text)
         self._credits_value.setText(state.credits)
         self._credits_expiry.setText("Expires in: {}".format(state.credit_expiry))
+        self._render_reset_button_state()
         self._plan.setText("Plan: {}".format(state.plan))
         self._sessions_24h.setText(state.sessions_24h)
         self._sessions_7d.setText(state.sessions_7d)

@@ -11,14 +11,13 @@ import certifi
 
 
 SECTION_VISIBILITY_KEYS = (
-    "codex_analytics", "balance", "credits", "usage_breakdown", "local_activity", "history",
+    "balance", "credits", "usage_breakdown", "local_activity", "history",
 )
 
 
 @dataclass
 class SectionVisibility:
     """Which dashboard sections are shown; every section defaults to visible."""
-    codex_analytics: bool = True
     balance: bool = True
     credits: bool = True
     usage_breakdown: bool = True

@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QRect, QSize, QTimer, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QCheckBox, QFrame, QLabel, QProgressBar, QScrollArea, QToolButton
+from PyQt6.QtWidgets import QApplication, QCheckBox, QFrame, QLabel, QMessageBox, QProgressBar, QScrollArea, QToolButton
 
 import config
 from config import AppConfig
@@ -276,7 +276,7 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertTrue(scroll.widgetResizable())
 
     def test_analytics_tabs_period_controls_and_sections_exist(self):
-        for name in ("usageTab", "reviewTab", "period7D", "period1M", "periodCustom", "groupByDay"):
+        for name in ("usageTab", "period7D", "period1M", "periodCustom", "groupByDay"):
             self.assertIsNotNone(self.window.findChild(QToolButton, name), name)
         self.assertFalse(self.window.findChild(QToolButton, "periodCustom").isEnabled())
         self.assertEqual(self.window.findChild(QToolButton, "periodCustom").toolTip(), "Custom range is not available")
@@ -295,7 +295,7 @@ class DashboardWidgetTests(unittest.TestCase):
         self.app.processEvents()
 
         title = self.window.findChild(QLabel, "title")
-        self.assertEqual(title.text(), "Codex Analytics")
+        self.assertEqual(title.text(), "Codex Usage")
         self.assertTrue(title.wordWrap())
 
     def test_section_toggles_are_clickable_and_history_persists(self):
@@ -326,35 +326,16 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertTrue(self.window._history_card.isVisibleTo(self.window))
         self.assertTrue(config.load_config().section_visibility.history)
 
-    def test_codex_analytics_toggle_hides_only_the_title(self):
-        """Regression: the Codex Analytics toggle changes only the title label."""
+    def test_codex_analytics_toggle_is_removed_from_dashboard_settings(self):
         self.window.show()
         self.app.processEvents()
 
         title = self.window.findChild(QLabel, "title")
-        check = self.window.findChild(QCheckBox, "codexAnalyticsSectionCheck")
         self.assertIsNotNone(title)
-        self.assertIsNotNone(check)
-        self.assertEqual(title.text(), "Codex Analytics")
-        self.assertTrue(check.isChecked())
+        check = self.window.findChild(QCheckBox, "codexAnalyticsSectionCheck")
+        self.assertIsNone(check)
+        self.assertEqual(title.text(), "Codex Usage")
         self.assertTrue(title.isVisibleTo(self.window))
-
-        check.setChecked(False)
-
-        self.assertFalse(title.isVisibleTo(self.window))
-        self.assertFalse(config.load_config().section_visibility.codex_analytics)
-        self.assertTrue(self.window._five_balance[0].isVisibleTo(self.window))
-        self.assertTrue(self.window._weekly_balance[0].isVisibleTo(self.window))
-        self.assertTrue(self.window._credits_card.isVisibleTo(self.window))
-        self.assertTrue(self.window._breakdown_card.isVisibleTo(self.window))
-        self.assertTrue(self.window._history_card.isVisibleTo(self.window))
-        self.assertTrue(self.window._group_by_day.isVisibleTo(self.window))
-        self.assertTrue(self.window._last_update.isVisibleTo(self.window))
-
-        check.setChecked(True)
-
-        self.assertTrue(title.isVisibleTo(self.window))
-        self.assertTrue(config.load_config().section_visibility.codex_analytics)
 
     def test_group_by_day_hidden_when_history_disabled_and_restored_when_enabled(self):
         """Regression: Group by Day belongs to History and follows its toggle."""
@@ -386,18 +367,6 @@ class DashboardWidgetTests(unittest.TestCase):
 
         self.assertNotEqual(check.isChecked(), before)
 
-    def test_code_review_tab_swaps_to_unavailable_page(self):
-        self.window.findChild(QToolButton, "reviewTab").click()
-
-        self.assertFalse(self.window._usage_page.isVisibleTo(self.window))
-        self.assertTrue(self.window._review_page.isVisibleTo(self.window))
-        notice = self.window.findChild(QLabel, "reviewNotice")
-        self.assertIn("not available", notice.text())
-
-        self.window.findChild(QToolButton, "usageTab").click()
-        self.assertTrue(self.window._usage_page.isVisibleTo(self.window))
-        self.assertFalse(self.window._review_page.isVisibleTo(self.window))
-
     def test_auto_reload_card_and_usage_limit_resets_section_are_removed(self):
         """Regression: Auto reload card and redundant Usage limit resets stay gone."""
         self.assertIsNone(self.window.findChild(QFrame, "infoCard"))
@@ -413,6 +382,36 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertNotIn("availableFiveReset", stylesheet)
         self.assertIsNotNone(self.window.findChild(QLabel, "historyValue"))
         self.assertIsNotNone(self.window.findChild(QToolButton, "period7D"))
+
+    def test_use_reset_button_requires_confirmation_when_weekly_quota_is_exhausted(self):
+        usage = {
+            "five_hour": 25,
+            "five_hour_reset": "2026-09-01T14:30:00Z",
+            "seven_day": 100,
+            "seven_day_reset": "2026-09-04T12:00:00Z",
+            "reset_credits": 3,
+        }
+
+        with patch("dashboard.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as confirm:
+            self.window._render(usage, LocalCodexSnapshot())
+            button = self.window.findChild(QToolButton, "useResetButton")
+            self.assertIsNotNone(button)
+            self.assertTrue(button.isEnabled())
+            self.assertEqual(button.text(), "Use reset")
+            button.click()
+
+        confirm.assert_called_once()
+        self.assertTrue(button.isEnabled())
+
+    def test_use_reset_button_starts_disabled_and_disables_when_credits_are_zero(self):
+        button = self.window.findChild(QToolButton, "useResetButton")
+        self.assertIsNotNone(button)
+        self.assertFalse(button.isEnabled())
+
+        self.window._render({"reset_credits": 2, "seven_day": 100}, LocalCodexSnapshot())
+        self.assertTrue(button.isEnabled())
+        self.window._render({"reset_credits": 0}, LocalCodexSnapshot())
+        self.assertFalse(button.isEnabled())
 
     def test_settings_icon_toggles_inline_settings_panel(self):
         settings_button = self.window.findChild(QToolButton, "settingsToggle")
@@ -434,7 +433,6 @@ class DashboardWidgetTests(unittest.TestCase):
     def test_section_checkboxes_toggle_visibility_and_persist(self):
         self.window._settings_button.click()
         expected_checks = {
-            "codexAnalyticsSectionCheck": "codex_analytics",
             "balanceSectionCheck": "balance",
             "creditsSectionCheck": "credits",
             "usageBreakdownSectionCheck": "usage_breakdown",

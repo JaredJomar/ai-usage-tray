@@ -10,8 +10,9 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
   - 🔴 Red: 85%+
 - **Tooltip with compact progress bars** and reset countdowns
 - **Browser-based OAuth**, PKCE flow matching Codex CLI (no device codes)
-- **Codex Analytics dashboard** with live usage display (5h hourly + 7d weekly windows)
-- **Show Sections toggles** for Balance, Credits, Usage breakdown, Local activity, History, and title-only Codex Analytics visibility
+- **Codex Usage dashboard** with live usage display (5h hourly + 7d weekly windows)
+- **Use reset** action that opens Codex beside the remaining reset credits
+- **Show Sections toggles** for Balance, Credits, Usage breakdown, Local activity, and History
 - **Group by Day** averaging for usage snapshots, available only with History visible
 - **Reset credits** counter with countdown timers
 - **Dashboard theme toggle** with persistent light and dark modes
@@ -58,13 +59,12 @@ before the nearest available credit expires.
 └────────────────────────────────────────────┘
 ```
 
-The dashboard opens from the tray icon as Codex Analytics and includes live limit cards, reset
+The dashboard opens from the tray icon as Codex Usage and includes live limit cards, reset
 credit details, local session activity, usage history, and locally observed
 token/model metadata when available. The model section shows only activity from
 the last 72 hours, and the theme button switches between light and dark mode.
 The settings (gear) panel offers Show Sections toggles for Balance, Credits,
-Usage breakdown, Local activity, History, and Codex Analytics. The Codex
-Analytics toggle controls only the title label, while Group by Day averages
+Usage breakdown, Local activity, and History. Group by Day averages
 usage snapshots per day and is shown only when History is visible.
 
 ## Quick Start
@@ -112,7 +112,6 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   "display_mode": "icon",
   "dark_mode": false,
   "section_visibility": {
-    "codex_analytics": true,
     "balance": true,
     "credits": true,
     "usage_breakdown": true,
@@ -124,8 +123,8 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
 
 ## Releases
 
-v1.0.9 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.9/AIUsageTray-Windows.exe)
-from the [v1.0.9 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.9).
+v1.0.10 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.10/AIUsageTray-Windows.exe)
+from the [v1.0.10 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.10).
 Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API

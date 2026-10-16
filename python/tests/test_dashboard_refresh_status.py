@@ -150,6 +150,7 @@ class DashboardRefreshStatusWidgetTests(unittest.TestCase):
 
         status = self.window.findChild(QLabel, "subtitle")
         self.assertIsNotNone(status)
+        self.assertFalse(status.isVisibleTo(self.window))
         self.assertIn("Refresh failed", status.text())
         self.assertIn("showing limits from", status.text())
         self.assertIn("503", status.toolTip())
