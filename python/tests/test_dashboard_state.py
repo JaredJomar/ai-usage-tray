@@ -421,7 +421,7 @@ class DashboardWidgetTests(unittest.TestCase):
             "reset_credits": 3,
         }
 
-        with patch("dashboard.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as confirm:
+        with patch("dashboard.QMessageBox.exec", return_value=QMessageBox.StandardButton.No) as confirm:
             self.window._render(usage, LocalCodexSnapshot())
             button = self.window.findChild(QToolButton, "useResetButton")
             self.assertIsNotNone(button)
@@ -434,7 +434,7 @@ class DashboardWidgetTests(unittest.TestCase):
 
     def test_confirmed_unexhausted_weekly_window_attempts_consume_and_shows_rejection(self):
         usage = {"five_hour": 25, "seven_day": 70, "reset_credits": 1}
-        with patch("dashboard.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes), \
+        with patch("dashboard.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes), \
              patch(
                  "dashboard.CodexProvider.consume_reset_credit",
                  return_value=ResetConsumeResult("api_error", "API returned HTTP 403"),
@@ -449,7 +449,7 @@ class DashboardWidgetTests(unittest.TestCase):
     def test_reset_button_stays_disabled_while_consume_worker_is_running(self):
         self.window._reset_worker = DashboardResetWorker(self.window._config, "request-1")
         with patch("dashboard.DashboardResetWorker.isRunning", return_value=True), \
-             patch("dashboard.QMessageBox.question") as confirm:
+             patch("dashboard.QMessageBox.exec") as confirm:
             self.window._render(
                 {"five_hour": 25, "seven_day": 70, "reset_credits": 1},
                 LocalCodexSnapshot(),
