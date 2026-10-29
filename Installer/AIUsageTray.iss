@@ -1,5 +1,5 @@
 #define MyAppName "AI Usage Tray"
-#define MyAppVersion "1.0.10"
+#define MyAppVersion "1.0.11"
 #define MyAppPublisher "AI Usage Tray"
 #define MyAppExeName "AIUsageTray.exe"
 
