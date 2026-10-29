@@ -49,10 +49,10 @@ def test_credit_alerts_cross_each_threshold_once_without_usage_cooldown_suppress
     manager._check_reset_credit_notifications(now + timedelta(minutes=46))
 
     assert len(manager._tray_icon.notifications) == 4
-    assert "60 minutes" in manager._tray_icon.notifications[0][0]
-    assert "30 minutes" in manager._tray_icon.notifications[1][0]
-    assert "15 minutes" in manager._tray_icon.notifications[2][0]
-    assert "5 minutes" in manager._tray_icon.notifications[3][0]
+    assert manager._tray_icon.notifications[0][0].startswith("Reset expires in 50 minutes")
+    assert manager._tray_icon.notifications[1][0].startswith("Reset expires in 25 minutes")
+    assert manager._tray_icon.notifications[2][0].startswith("Reset expires in 14 minutes")
+    assert manager._tray_icon.notifications[3][0].startswith("Reset expires in 4 minutes")
 
 
 def test_credit_first_seen_inside_fifteen_minutes_only_alerts_at_fifteen():
@@ -61,7 +61,7 @@ def test_credit_first_seen_inside_fifteen_minutes_only_alerts_at_fifteen():
     manager._check_notifications()
 
     assert len(manager._tray_icon.notifications) == 1
-    assert "15 minutes" in manager._tray_icon.notifications[0][0]
+    assert manager._tray_icon.notifications[0][0].startswith("Reset expires in ")
 
 
 def test_credit_first_seen_inside_five_minutes_only_alerts_at_five():
@@ -70,7 +70,7 @@ def test_credit_first_seen_inside_five_minutes_only_alerts_at_five():
     manager._check_reset_credit_notifications(datetime.now(timezone.utc))
 
     assert len(manager._tray_icon.notifications) == 1
-    assert "5 minutes" in manager._tray_icon.notifications[0][0]
+    assert manager._tray_icon.notifications[0][0].startswith("Reset expires in ")
 
 
 def test_skipped_thresholds_emit_only_the_nearest_relevant_alert():
@@ -81,8 +81,8 @@ def test_skipped_thresholds_emit_only_the_nearest_relevant_alert():
     manager._check_reset_credit_notifications(now + timedelta(minutes=48))
 
     assert len(manager._tray_icon.notifications) == 2
-    assert "60 minutes" in manager._tray_icon.notifications[0][0]
-    assert "5 minutes" in manager._tray_icon.notifications[1][0]
+    assert manager._tray_icon.notifications[0][0].startswith("Reset expires in 50 minutes")
+    assert manager._tray_icon.notifications[1][0].startswith("Reset expires in 2 minutes")
 
 
 def test_alerts_are_disabled_when_notifications_are_off_or_no_credit_is_available():

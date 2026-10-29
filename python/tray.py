@@ -490,9 +490,7 @@ class TrayManager:
     def _send_credit_notification(self, threshold: int, minutes_remaining: float) -> None:
         Logger.info("main", "ALERT: Codex reset credit expires within {} minutes".format(threshold))
         self._send_native_notification(
-            "A reset credit expires in about {} minutes ({} minutes alert). "
-            "Open Codex Usage and choose 'Use reset' before it expires, "
-            "even if you still have remaining balance.".format(
+            "Reset expires in {} minutes".format(
                 max(1, int(minutes_remaining)), threshold,
             ),
             "Codex reset credit expiry",
