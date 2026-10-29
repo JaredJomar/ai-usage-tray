@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication, QCheckBox, QFrame, QLabel, QMessageBox
 import config
 from config import AppConfig
 from dashboard import (
+    DashboardResetWorker,
     DashboardTheme,
     DashboardWindow,
     ElidedLabel,
@@ -25,6 +26,7 @@ from dashboard import (
     _remaining_balance,
 )
 from local_codex import LocalCodexSnapshot, UsageSnapshot
+from providers.codex import ResetConsumeResult
 
 
 class DashboardStateTests(unittest.TestCase):
@@ -383,11 +385,11 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertIsNotNone(self.window.findChild(QLabel, "historyValue"))
         self.assertIsNotNone(self.window.findChild(QToolButton, "period7D"))
 
-    def test_use_reset_button_requires_confirmation_when_weekly_quota_is_exhausted(self):
+    def test_use_reset_button_confirms_before_using_credit_when_weekly_quota_is_unexhausted(self):
         usage = {
             "five_hour": 25,
             "five_hour_reset": "2026-09-01T14:30:00Z",
-            "seven_day": 100,
+            "seven_day": 70,
             "seven_day_reset": "2026-09-04T12:00:00Z",
             "reset_credits": 3,
         }
@@ -402,6 +404,33 @@ class DashboardWidgetTests(unittest.TestCase):
 
         confirm.assert_called_once()
         self.assertTrue(button.isEnabled())
+
+    def test_confirmed_unexhausted_weekly_window_attempts_consume_and_shows_rejection(self):
+        usage = {"five_hour": 25, "seven_day": 70, "reset_credits": 1}
+        with patch("dashboard.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes), \
+             patch(
+                 "dashboard.CodexProvider.consume_reset_credit",
+                 return_value=ResetConsumeResult("api_error", "API returned HTTP 403"),
+             ) as consume, \
+             patch("dashboard.DashboardResetWorker.start", lambda worker: worker.run()):
+            self.window._render(usage, LocalCodexSnapshot())
+            self.window._confirm_reset()
+
+        consume.assert_called_once()
+        self.assertIn("Reset credit not used: API returned HTTP 403", self.window._status.text())
+
+    def test_reset_button_stays_disabled_while_consume_worker_is_running(self):
+        self.window._reset_worker = DashboardResetWorker(self.window._config, "request-1")
+        with patch("dashboard.DashboardResetWorker.isRunning", return_value=True), \
+             patch("dashboard.QMessageBox.question") as confirm:
+            self.window._render(
+                {"five_hour": 25, "seven_day": 70, "reset_credits": 1},
+                LocalCodexSnapshot(),
+            )
+            self.window._confirm_reset()
+
+        self.assertFalse(self.window._use_reset_button.isEnabled())
+        confirm.assert_not_called()
 
     def test_use_reset_button_starts_disabled_and_disables_when_credits_are_zero(self):
         button = self.window.findChild(QToolButton, "useResetButton")

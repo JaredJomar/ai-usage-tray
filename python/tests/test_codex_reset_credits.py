@@ -11,6 +11,7 @@ class MemoryCache:
     def __init__(self, cached=None):
         self.cached = cached
         self.saved = None
+        self.cleared_provider = None
 
     def get_cached(self, provider):
         return self.cached
@@ -22,6 +23,9 @@ class MemoryCache:
 
     def save(self, provider, data):
         self.saved = data
+
+    def clear_provider(self, provider):
+        self.cleared_provider = provider
 
 
 class Response:
@@ -105,6 +109,7 @@ def test_consume_reset_credit_posts_idempotent_request_with_optional_account_id(
     result = provider.consume_reset_credit("request-1", "credit-1")
 
     assert result.status == "reset"
+    assert provider._cache.cleared_provider == "codex"
     assert requests == [(
         provider.RESET_CREDITS_CONSUME_URL,
         {
@@ -119,3 +124,35 @@ def test_consume_reset_credit_posts_idempotent_request_with_optional_account_id(
             "verify": "test-ca.pem",
         },
     )]
+
+
+def test_consume_reset_credit_preserves_server_rejection(monkeypatch, tmp_path):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"tokens": {"access_token": "test-token"}}), encoding="utf-8")
+    provider = CodexProvider(MemoryCache())
+    monkeypatch.setattr(codex_module, "get_codex_auth_path", lambda: auth_path)
+    monkeypatch.setattr(codex_module, "get_ca_bundle_path", lambda: "test-ca.pem")
+    monkeypatch.setattr(
+        codex_module.requests, "post", lambda url, **kwargs: Response(403, {"error": "not eligible"}),
+    )
+
+    result = provider.consume_reset_credit("request-1", "credit-1")
+
+    assert result.status == "api_error"
+    assert result.detail == "API returned HTTP 403"
+
+
+def test_consume_reset_credit_does_not_assume_success_for_unknown_response(monkeypatch, tmp_path):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"tokens": {"access_token": "test-token"}}), encoding="utf-8")
+    provider = CodexProvider(MemoryCache())
+    monkeypatch.setattr(codex_module, "get_codex_auth_path", lambda: auth_path)
+    monkeypatch.setattr(codex_module, "get_ca_bundle_path", lambda: "test-ca.pem")
+    monkeypatch.setattr(
+        codex_module.requests, "post", lambda url, **kwargs: Response(200, {}),
+    )
+
+    result = provider.consume_reset_credit("request-1", "credit-1")
+
+    assert result.status == "api_error"
+    assert result.detail == "Unexpected API response"

@@ -166,10 +166,19 @@ class CodexProvider:
             Logger.warn("codex", "Reset-credit consume failed (HTTP {})".format(response.status_code))
             return ResetConsumeResult("api_error", "API returned HTTP {}".format(response.status_code))
         try:
-            outcome = response.json().get("outcome", "reset")
-        except Exception:
-            outcome = "reset"
-        return ResetConsumeResult(str(outcome), "Reset request completed")
+            response_data = response.json()
+        except ValueError:
+            return ResetConsumeResult("api_error", "Unexpected API response")
+        if not isinstance(response_data, dict):
+            return ResetConsumeResult("api_error", "Unexpected API response")
+        outcome = response_data.get("outcome")
+        if outcome not in ("reset", "alreadyRedeemed"):
+            return ResetConsumeResult("api_error", "Unexpected API response")
+        try:
+            self._cache.clear_provider("codex")
+        except OSError as error:
+            Logger.warn("codex", "Failed to invalidate usage cache after reset: {}".format(error))
+        return ResetConsumeResult(outcome, "Reset request completed")
 
     def _fallback(self, status: str, detail: str) -> FetchResult:
         """Attach prior cached quota data to a failed refresh when usable."""

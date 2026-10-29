@@ -34,6 +34,17 @@ def test_save_stores_additive_last_success_and_reads_back_fresh_entry(tmp_path, 
     assert manager.get_cached("codex") == USAGE
 
 
+def test_clear_provider_invalidates_only_the_selected_provider(tmp_path, monkeypatch):
+    manager = _manager(tmp_path, monkeypatch)
+    manager.save("codex", USAGE)
+    manager.save("other", USAGE)
+
+    manager.clear_provider("codex")
+
+    assert manager.get_entry("codex") is None
+    assert manager.get_entry("other") is not None
+
+
 def test_saved_payload_keeps_caller_dict_untouched_and_meta_hidden_on_read(tmp_path, monkeypatch):
     manager = _manager(tmp_path, monkeypatch)
     data = dict(USAGE)

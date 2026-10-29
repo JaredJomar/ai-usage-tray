@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import sys
 import uuid
-import webbrowser
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -37,7 +36,6 @@ from providers.codex import (
     STATUS_UNAVAILABLE,
 )
 
-CODEX_WEB_URL = "https://chatgpt.com/codex"
 
 @dataclass(frozen=True)
 class DashboardState:
@@ -601,6 +599,7 @@ class DashboardWindow(QWidget):
         self._worker: Optional[DashboardRefreshWorker] = None
         self._reset_worker: Optional[DashboardResetWorker] = None
         self._closing = False
+        self._refresh_after_reset = False
         self._refresh_scheduled = False
         self._last_state: Optional[DashboardState] = None
         self._last_usage: Optional[dict] = None
@@ -958,7 +957,7 @@ class DashboardWindow(QWidget):
         self._use_reset_button = QToolButton(objectName="useResetButton")
         self._use_reset_button.setText("Use reset")
         self._use_reset_button.setEnabled(False)
-        self._use_reset_button.setToolTip("Open Codex to use a reset credit")
+        self._use_reset_button.setToolTip("Use an available reset credit now, even with remaining balance")
         self._use_reset_button.setAccessibleName("Use reset credit")
         self._use_reset_button.clicked.connect(self._confirm_reset)
         heading.addWidget(self._use_reset_button)
@@ -980,36 +979,39 @@ class DashboardWindow(QWidget):
         return None
 
     @staticmethod
-    def _open_codex() -> None:
-        webbrowser.open(CODEX_WEB_URL)
-
-    def _render_reset_button_state(self) -> None:
-        usage = self._last_usage or {}
-        try:
-            weekly_used = float(usage.get("seven_day"))
-        except (TypeError, ValueError):
-            weekly_used = 0
+    def _has_available_reset_credit(usage: dict) -> bool:
         credits = usage.get("reset_credits")
-        self._use_reset_button.setEnabled(
+        return (
             isinstance(credits, (int, float))
             and not isinstance(credits, bool)
             and credits > 0
-            and weekly_used >= 100
+        )
+
+    def _render_reset_button_state(self) -> None:
+        usage = self._last_usage or {}
+        self._use_reset_button.setEnabled(
+            self._has_available_reset_credit(usage)
+            and not (self._reset_worker is not None and self._reset_worker.isRunning())
         )
 
     def _confirm_reset(self) -> None:
-        if not self._use_reset_button.isEnabled() or self._last_usage is None:
+        if (
+            not self._use_reset_button.isEnabled()
+            or self._last_usage is None
+            or not self._has_available_reset_credit(self._last_usage)
+            or (self._reset_worker is not None and self._reset_worker.isRunning())
+        ):
             return
         usage = self._last_usage
         weekly = usage.get("seven_day")
         expiry = _nearest_credit_expiry(usage) or "unknown"
         message = (
-            "Your weekly quota is exhausted.\n\n"
+            "This will use one available reset credit now.\n\n"
             "5-hour remaining: {}\n"
             "Weekly remaining: {}\n"
             "Reset credits available: {}\n"
             "Nearest credit expiry: {}\n\n"
-            "Use one reset credit now?"
+            "The service may reject the request. Continue?"
         ).format(
             _remaining_balance(_format_usage(usage.get("five_hour")))[0],
             _remaining_balance(_format_usage(weekly))[0],
@@ -1039,8 +1041,13 @@ class DashboardWindow(QWidget):
     def _reset_finished(self, result: ResetConsumeResult) -> None:
         self._reset_worker = None
         if result.status in ("reset", "alreadyRedeemed"):
-            self._status.setText("Reset credit used; refreshing limits…")
-            self.refresh()
+            self._last_usage = None
+            self._render_reset_button_state()
+            self._status.setText("Reset request completed; refreshing limits…")
+            if self._worker is not None and self._worker.isRunning():
+                self._refresh_after_reset = True
+            else:
+                self.refresh()
             return
         self._status.setText("Reset credit not used: {}".format(result.detail))
         self._render_reset_button_state()
@@ -1106,6 +1113,9 @@ class DashboardWindow(QWidget):
             application = QApplication.instance()
             if application:
                 application.quit()
+        elif self._refresh_after_reset:
+            self._refresh_after_reset = False
+            self.refresh()
 
     def _render(
         self, usage: Optional[dict], local: LocalCodexSnapshot,

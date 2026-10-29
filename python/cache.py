@@ -90,6 +90,13 @@ class CacheManager:
             json.dump(payload, f, indent=2)
         
         temp_file.replace(cache_file)
+
+    def clear_provider(self, provider: str) -> None:
+        cache_file = self._cache_dir / f"usage-cache-{provider}.json"
+        try:
+            cache_file.unlink()
+        except FileNotFoundError:
+            pass
     
     def clear(self):
         """Clear all cached data"""
