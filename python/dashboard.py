@@ -1018,13 +1018,26 @@ class DashboardWindow(QWidget):
             usage.get("reset_credits"),
             expiry,
         )
-        answer = QMessageBox.question(
-            self,
-            "Confirm reset credit",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Confirm reset credit")
+        dialog.setText(message)
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        dialog.setStyleSheet(self.styleSheet())
+        dialog.setObjectName("resetConfirmation")
+        dialog.setMinimumWidth(400)
+        dialog.adjustSize()
+        dialog.show()
+        dialog.adjustSize()
+        dialog.move(self.screen().availableGeometry().center() - dialog.rect().center())
+        answer = dialog.exec()
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._use_reset_button.setEnabled(False)

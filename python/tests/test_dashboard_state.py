@@ -385,6 +385,33 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertIsNotNone(self.window.findChild(QLabel, "historyValue"))
         self.assertIsNotNone(self.window.findChild(QToolButton, "period7D"))
 
+    def test_reset_confirmation_is_centered_on_screen_and_above_dashboard(self):
+        self.window._render({"five_hour": 25, "seven_day": 70, "reset_credits": 1}, LocalCodexSnapshot())
+        self.window.move(0, 0)
+        self.window.show()
+        observed = {}
+        timer = QTimer()
+        timer.setSingleShot(True)
+
+        def inspect_confirmation():
+            dialog = QApplication.activeModalWidget()
+            if isinstance(dialog, QMessageBox):
+                observed["center"] = dialog.frameGeometry().center()
+                observed["topmost"] = bool(dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+                observed["parent"] = dialog.parentWidget()
+                dialog.done(QMessageBox.StandardButton.No)
+
+        timer.timeout.connect(inspect_confirmation)
+        timer.start(50)
+        with patch("dashboard.CodexProvider.consume_reset_credit") as consume:
+            self.window._confirm_reset()
+        consume.assert_not_called()
+        self.assertIn("center", observed)
+        expected = self.window.screen().availableGeometry().center()
+        self.assertLessEqual((observed["center"] - expected).manhattanLength(), 2)
+        self.assertTrue(observed["topmost"])
+        self.assertIs(observed["parent"], self.window)
+
     def test_use_reset_button_confirms_before_using_credit_when_weekly_quota_is_unexhausted(self):
         usage = {
             "five_hour": 25,
