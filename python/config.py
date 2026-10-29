@@ -34,7 +34,9 @@ class AppConfig:
     notify_critical_threshold: int = 95
     notify_cooldown_minutes: int = 15
     reset_credit_notify_60_minutes: int = 60
+    reset_credit_notify_30_minutes: int = 30
     reset_credit_notify_15_minutes: int = 15
+    reset_credit_notify_5_minutes: int = 5
     codex_enabled: bool = True
     launch_on_startup: bool = True
     display_mode: str = "icon"

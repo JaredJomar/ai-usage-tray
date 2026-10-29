@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import settings_window as settings_module
 import tray as tray_module
+import config as config_module
+from cache import CacheManager
 from config import AppConfig
 from tray import TrayManager
 
@@ -38,15 +40,19 @@ def test_credit_alerts_cross_each_threshold_once_without_usage_cooldown_suppress
     now = datetime.now(timezone.utc)
     manager = _manager_with_credit((now + timedelta(minutes=50)).isoformat())
 
-    manager._check_notifications()
-    manager._check_notifications()
-    manager._codex_data["reset_credit_expiries"][0]["expires_at"] = (now + timedelta(minutes=14)).isoformat()
-    manager._check_notifications()
-    manager._check_notifications()
+    manager._check_reset_credit_notifications(now)
+    manager._check_reset_credit_notifications(now)
+    manager._check_reset_credit_notifications(now + timedelta(minutes=25))
+    manager._check_reset_credit_notifications(now + timedelta(minutes=25))
+    manager._check_reset_credit_notifications(now + timedelta(minutes=36))
+    manager._check_reset_credit_notifications(now + timedelta(minutes=36))
+    manager._check_reset_credit_notifications(now + timedelta(minutes=46))
 
-    assert len(manager._tray_icon.notifications) == 2
+    assert len(manager._tray_icon.notifications) == 4
     assert "60 minutes" in manager._tray_icon.notifications[0][0]
-    assert "15 minutes" in manager._tray_icon.notifications[1][0]
+    assert "30 minutes" in manager._tray_icon.notifications[1][0]
+    assert "15 minutes" in manager._tray_icon.notifications[2][0]
+    assert "5 minutes" in manager._tray_icon.notifications[3][0]
 
 
 def test_credit_first_seen_inside_fifteen_minutes_only_alerts_at_fifteen():
@@ -56,6 +62,75 @@ def test_credit_first_seen_inside_fifteen_minutes_only_alerts_at_fifteen():
 
     assert len(manager._tray_icon.notifications) == 1
     assert "15 minutes" in manager._tray_icon.notifications[0][0]
+
+
+def test_credit_first_seen_inside_five_minutes_only_alerts_at_five():
+    manager = _manager_with_credit((datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat())
+
+    manager._check_reset_credit_notifications(datetime.now(timezone.utc))
+
+    assert len(manager._tray_icon.notifications) == 1
+    assert "5 minutes" in manager._tray_icon.notifications[0][0]
+
+
+def test_skipped_thresholds_emit_only_the_nearest_relevant_alert():
+    now = datetime.now(timezone.utc)
+    manager = _manager_with_credit((now + timedelta(minutes=50)).isoformat())
+
+    manager._check_reset_credit_notifications(now)
+    manager._check_reset_credit_notifications(now + timedelta(minutes=48))
+
+    assert len(manager._tray_icon.notifications) == 2
+    assert "60 minutes" in manager._tray_icon.notifications[0][0]
+    assert "5 minutes" in manager._tray_icon.notifications[1][0]
+
+
+def test_alerts_are_disabled_when_notifications_are_off_or_no_credit_is_available():
+    now = datetime.now(timezone.utc)
+    manager = _manager_with_credit((now + timedelta(minutes=2)).isoformat())
+
+    manager._config.notifications_enabled = False
+    manager._check_reset_credit_notifications(now)
+    manager._config.notifications_enabled = True
+    manager._codex_data["reset_credits"] = 0
+    manager._check_reset_credit_notifications(now)
+
+    assert manager._tray_icon.notifications == []
+
+
+def test_expired_and_absent_credit_records_do_not_alert():
+    now = datetime.now(timezone.utc)
+    manager = _manager_with_credit((now - timedelta(minutes=1)).isoformat())
+
+    manager._check_reset_credit_notifications(now)
+    manager._codex_data["reset_credit_expiries"] = []
+    manager._check_reset_credit_notifications(now)
+
+    assert manager._tray_icon.notifications == []
+
+
+def test_status_ticks_check_credit_alerts_without_a_refresh():
+    now = datetime.now(timezone.utc)
+    manager = _manager_with_credit((now + timedelta(minutes=50)).isoformat())
+    manager._last_fetch = None
+    manager._tray_icon = None
+
+    manager._update_status_display()
+
+    assert len(manager._credit_alerts_sent) == 1
+
+
+def test_status_tick_does_not_alert_from_stale_data_after_cache_invalidation(
+    tmp_path, monkeypatch,
+):
+    now = datetime.now(timezone.utc)
+    manager = _manager_with_credit((now + timedelta(minutes=50)).isoformat())
+    monkeypatch.setattr(config_module, "CONFIG_DIR", tmp_path)
+    manager._cache = CacheManager()
+
+    manager._check_reset_credit_notifications(now)
+
+    assert manager._tray_icon.notifications == []
 
 
 def test_tooltip_includes_reset_count_and_nearest_credit_expiry():

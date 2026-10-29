@@ -213,6 +213,8 @@ class TrayManager:
 
     def _update_status_display(self):
         """Advance the tooltip's status age without performing a network fetch."""
+        if self._config.notifications_enabled:
+            self._check_reset_credit_notifications(datetime.now(timezone.utc))
         if self._last_fetch is None and not self._codex_data:
             return
         if getattr(self, "_tray_icon", None) is None:
@@ -443,23 +445,33 @@ class TrayManager:
             self._last_notify_time = now
 
     def _check_reset_credit_notifications(self, now: datetime) -> None:
+        if not self._config.notifications_enabled:
+            return
+        cache = getattr(self, "_cache", None)
+        if cache is not None:
+            entry = cache.get_entry("codex")
+            if entry is None:
+                return
+            self._codex_data = entry.data
+        credits = (self._codex_data or {}).get("reset_credits")
+        if not isinstance(credits, (int, float)) or isinstance(credits, bool) or credits <= 0:
+            return
         with self._credit_alert_lock:
-            thresholds = (
+            thresholds = sorted((
                 self._config.reset_credit_notify_60_minutes,
+                self._config.reset_credit_notify_30_minutes,
                 self._config.reset_credit_notify_15_minutes,
-            )
+                self._config.reset_credit_notify_5_minutes,
+            ))
             expiries = self._credit_expiries()
-            active_credits = {(credit_id, expiry_text) for credit_id, expiry_text, _ in expiries}
-            self._credit_alerts_sent.intersection_update(
-                {key for key in self._credit_alerts_sent if key[:2] in active_credits},
-            )
             for credit_id, expiry_text, expiry in expiries:
                 minutes_remaining = (expiry - now).total_seconds() / 60
                 if minutes_remaining <= 0:
                     continue
-                threshold = thresholds[1] if minutes_remaining <= thresholds[1] else None
-                if threshold is None and minutes_remaining <= thresholds[0]:
-                    threshold = thresholds[0]
+                threshold = next(
+                    (value for value in thresholds if minutes_remaining <= value),
+                    None,
+                )
                 if threshold is None:
                     continue
                 alert_key = (credit_id, expiry_text, threshold)
@@ -478,7 +490,9 @@ class TrayManager:
     def _send_credit_notification(self, threshold: int, minutes_remaining: float) -> None:
         Logger.info("main", "ALERT: Codex reset credit expires within {} minutes".format(threshold))
         self._send_native_notification(
-            "A reset credit expires in about {} minutes ({} minutes alert).".format(
+            "A reset credit expires in about {} minutes ({} minutes alert). "
+            "Open Codex Usage and choose 'Use reset' before it expires, "
+            "even if you still have remaining balance.".format(
                 max(1, int(minutes_remaining)), threshold,
             ),
             "Codex reset credit expiry",

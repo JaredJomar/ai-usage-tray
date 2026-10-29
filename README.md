@@ -11,7 +11,7 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 - **Tooltip with compact progress bars** and reset countdowns
 - **Browser-based OAuth** with PKCE (no device codes)
 - **Codex Usage dashboard** with live usage display (5h hourly + 7d weekly windows)
-- **Use reset** action that opens Codex beside the remaining reset credits
+- **Use reset** action that confirms and attempts to consume an available reset credit before it expires
 - **Show Sections toggles** for Balance, Credits, Usage breakdown, Local activity, and History
 - **Group by Day** averaging for usage snapshots, available only with History visible
 - **Reset credits** counter with countdown timers
@@ -28,8 +28,14 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 ![AI Usage Tray tooltip](img/tray-tooltip.png)
 
 The tray icon is green below 60%, orange from 60% through 84%, and red at
-85% or higher. Reset-credit notifications appear one hour and fifteen minutes
-before the nearest available credit expires.
+85% or higher. Reset-credit notifications appear 60, 30, 15, and 5 minutes
+before an available credit expires. If the app wakes after earlier thresholds,
+it sends only the nearest relevant alert. Alerts are deduplicated per credit
+and expiry time.
+
+Choose **Use reset** in the dashboard to redeem a credit before it expires,
+even with remaining balance above 0%. The app does not require either usage
+window to be exhausted; the service still decides whether to accept the request.
 
 ### Dashboard — dark mode
 
@@ -112,7 +118,9 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   "notify_critical_threshold": 95,
   "notify_cooldown_minutes": 15,
   "reset_credit_notify_60_minutes": 60,
+  "reset_credit_notify_30_minutes": 30,
   "reset_credit_notify_15_minutes": 15,
+  "reset_credit_notify_5_minutes": 5,
   "codex_enabled": true,
   "launch_on_startup": true,
   "display_mode": "icon",
@@ -126,6 +134,13 @@ Stored in `%LocalAppData%\AI-Usage-Tray\config.json`:
   }
 }
 ```
+
+Existing configuration files without the 30-minute or 5-minute fields load
+with these defaults. The dashboard's **Use reset** action asks for confirmation,
+then sends a consume request for any available credit without requiring the
+weekly quota to be exhausted. A successful result is shown only when the API
+reports a recognized success outcome; server rejections are displayed as
+failures, and early-consumption eligibility remains controlled by the service.
 
 ## Releases
 

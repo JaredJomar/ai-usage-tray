@@ -29,9 +29,12 @@ def _usage():
 
 def _manager(data=None, result=None, refreshing=False):
     manager = TrayManager.__new__(TrayManager)
+    manager._config = AppConfig()
     manager._codex_data = data
     manager._last_fetch = result
     manager._refreshing = refreshing
+    manager._credit_alerts_sent = set()
+    manager._credit_alert_lock = threading.Lock()
     return manager
 
 

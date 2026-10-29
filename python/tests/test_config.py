@@ -63,6 +63,24 @@ def test_legacy_config_without_dark_mode_keeps_default(monkeypatch, tmp_path):
     assert loaded.section_visibility == config.SectionVisibility()
 
 
+def test_legacy_reset_alert_settings_keep_existing_values_and_add_new_defaults(monkeypatch, tmp_path):
+    config_path = tmp_path / "app" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '{"reset_credit_notify_60_minutes": 45, "reset_credit_notify_15_minutes": 10}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_path)
+
+    loaded = config.load_config()
+
+    assert loaded.reset_credit_notify_60_minutes == 45
+    assert loaded.reset_credit_notify_30_minutes == 30
+    assert loaded.reset_credit_notify_15_minutes == 10
+    assert loaded.reset_credit_notify_5_minutes == 5
+
+
 def test_section_visibility_defaults_all_visible_and_round_trips(monkeypatch, tmp_path):
     config_path = tmp_path / "app" / "config.json"
     monkeypatch.setattr(config, "CONFIG_DIR", config_path.parent)
