@@ -46,13 +46,9 @@ ICO includes 16, 24, 32, 48, 64, 128, and 256 pixel variants.
 
 ### Usage
 
-**Dark mode**
-
-<img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/dashboard-dark.png" width="720" alt="Usage tab in dark mode">
-
-**Light mode**
-
-<img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/dashboard-light.png" width="720" alt="Usage tab in light mode">
+| Dark mode | Light mode |
+| --- | --- |
+| <img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/dashboard-dark.png" width="440" alt="Usage tab in dark mode"> | <img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/dashboard-light.png" width="440" alt="Usage tab in light mode"> |
 
 ### Analytics
 
@@ -60,13 +56,9 @@ Analytics includes cost estimates and token totals, daily charts, type
 breakdowns, and model rankings. Its 24-hour, 7-day, 30-day, and 90-day ranges
 are separate from the Usage tab.
 
-**Dark mode**
-
-<img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/analytics-dark.png" width="720" alt="Analytics tab in dark mode">
-
-**Light mode**
-
-<img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/analytics-light.png" width="720" alt="Analytics tab in light mode">
+| Dark mode | Light mode |
+| --- | --- |
+| <img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/analytics-dark.png" width="440" alt="Analytics tab in dark mode"> | <img src="https://raw.githubusercontent.com/JaredJomar/ai-usage-tray/master/img/analytics-light.png" width="440" alt="Analytics tab in light mode"> |
 
 ### Tray tooltip
 
