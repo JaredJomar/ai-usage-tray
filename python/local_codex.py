@@ -10,6 +10,7 @@ import json
 import msvcrt
 import sqlite3
 import os
+import threading
 from contextlib import contextmanager
 from collections import Counter
 from dataclasses import dataclass, field
@@ -56,6 +57,120 @@ class UsageSnapshot:
     seven_day: Optional[float]
     tokens_used: Optional[int]
     session_count: int
+
+
+@dataclass(frozen=True)
+class TokenUsageRecord:
+    """Token counters from one local Codex response, with no conversation text."""
+
+    timestamp: str
+    session_id: str
+    model: str
+    input_tokens: int
+    cached_input_tokens: int
+    cache_write_input_tokens: int
+    output_tokens: int
+
+
+_TOKEN_USAGE_CACHE: dict[str, tuple[int, int, tuple[TokenUsageRecord, ...]]] = {}
+_TOKEN_USAGE_CACHE_LOCK = threading.Lock()
+
+
+def _nonnegative_token_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return 0
+    return int(value)
+
+
+def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord, ...]:
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(base_dir.resolve())
+        stat = resolved.stat()
+    except (OSError, ValueError):
+        return ()
+
+    cache_key = str(resolved).casefold()
+    with _TOKEN_USAGE_CACHE_LOCK:
+        cached = _TOKEN_USAGE_CACHE.get(cache_key)
+        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+
+    models_by_turn: dict[str, str] = {}
+    pending: list[tuple[str, str, str, dict[str, Any]]] = []
+    seen_responses: set[str] = set()
+    try:
+        with resolved.open("r", encoding="utf-8") as rollout_file:
+            for line in rollout_file:
+                # Ignore message and prompt records before parsing their payloads.
+                if '"turn_context"' not in line and '"token_usage_record"' not in line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                kind = event.get("type")
+                if kind == "turn_context":
+                    turn_id = payload.get("turn_id")
+                    model = payload.get("model")
+                    if isinstance(turn_id, str) and isinstance(model, str):
+                        models_by_turn[turn_id] = model.strip()
+                elif kind == "token_usage_record":
+                    response_id = payload.get("response_id")
+                    if isinstance(response_id, str) and response_id in seen_responses:
+                        continue
+                    if isinstance(response_id, str):
+                        seen_responses.add(response_id)
+                    turn_id = payload.get("turn_id")
+                    session_id = payload.get("session_id")
+                    usage = payload.get("usage")
+                    if not isinstance(usage, dict):
+                        continue
+                    timestamp = _format_timestamp(event.get("timestamp"))
+                    if timestamp and isinstance(turn_id, str):
+                        pending.append((timestamp, session_id if isinstance(session_id, str) else "", turn_id, usage))
+    except (OSError, UnicodeDecodeError):
+        return ()
+
+    records = tuple(
+        TokenUsageRecord(
+            timestamp=timestamp,
+            session_id=session_id,
+            model=models_by_turn.get(turn_id, ""),
+            input_tokens=_nonnegative_token_count(usage.get("input_tokens")),
+            cached_input_tokens=_nonnegative_token_count(usage.get("cached_input_tokens")),
+            cache_write_input_tokens=_nonnegative_token_count(usage.get("cache_write_input_tokens")),
+            output_tokens=_nonnegative_token_count(usage.get("output_tokens")),
+        )
+        for timestamp, session_id, turn_id, usage in pending
+    )
+    with _TOKEN_USAGE_CACHE_LOCK:
+        _TOKEN_USAGE_CACHE[cache_key] = (stat.st_mtime_ns, stat.st_size, records)
+    return records
+
+
+def read_token_usage_records(codex_dir: Optional[Path] = None) -> tuple[TokenUsageRecord, ...]:
+    """Read response-level token counts from Codex rollout metadata only.
+
+    This function deliberately ignores response/message payloads. Per-file
+    results are cached by size and mtime so dashboard refreshes stay lightweight.
+    """
+    base_dir = (codex_dir or CODEX_DIR).resolve()
+    records: list[TokenUsageRecord] = []
+    for folder_name in ("sessions", "archived_sessions"):
+        folder = base_dir / folder_name
+        if not folder.is_dir():
+            continue
+        try:
+            paths = folder.rglob("rollout-*.jsonl")
+            for path in paths:
+                records.extend(_read_token_usage_file(path, base_dir))
+        except OSError:
+            continue
+    return tuple(sorted(records, key=lambda item: item.timestamp))
 
 
 def _as_datetime(value: Any) -> Optional[datetime]:

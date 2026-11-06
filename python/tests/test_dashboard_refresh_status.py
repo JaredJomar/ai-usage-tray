@@ -296,8 +296,9 @@ class DashboardRefreshStatusWidgetTests(unittest.TestCase):
     def test_refresh_worker_exception_emits_api_error_result(self):
         worker = DashboardRefreshWorker(AppConfig(codex_enabled=True))
         received = []
-        worker.refreshed.connect(lambda usage, local, result: received.append(result))
+        worker.refreshed.connect(lambda usage, local, result, token_records: received.append(result))
         with patch("dashboard.read_local_codex_snapshot", return_value=LocalCodexSnapshot()), \
+             patch("dashboard.read_token_usage_records", return_value=()), \
              patch("dashboard.CacheManager"), \
              patch("dashboard.CodexProvider") as provider_cls:
             provider_cls.return_value.fetch_result.side_effect = RuntimeError("boom")

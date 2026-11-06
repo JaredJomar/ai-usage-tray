@@ -27,8 +27,9 @@ Windows system tray app for monitoring OpenAI Codex usage, with browser-based PK
 
 ![AI Usage Tray tooltip](img/tray-tooltip.png)
 
-The tray icon is green below 60%, orange from 60% through 84%, and red at
-85% or higher. Reset-credit notifications appear 60, 30, 15, and 5 minutes
+The tray icon uses a cyan left gauge for 5-hour usage and a green right gauge
+for weekly usage; each fill shows that window's used percentage. Reset-credit
+notifications appear 60, 30, 15, and 5 minutes
 before an available credit expires. If the app wakes after earlier thresholds,
 it sends only the nearest relevant alert. Alerts are deduplicated per credit
 and expiry time.
@@ -45,9 +46,12 @@ window to be exhausted; the service still decides whether to accept the request.
 
 ![AI Usage Tray dashboard in light mode](img/dashboard-light.png)
 
-The dashboard opens from the tray icon as Codex Usage and includes live limit cards, reset
-credit details, local session activity, usage history, and locally observed
-token/model metadata when available. The model section shows only activity from
+The dashboard opens from the tray icon as Codex Usage and has two tabs: Usage
+retains live limit cards, reset-credit details, local session activity, usage
+history, and locally observed token/model metadata; Analytics contains Cost,
+Tokens, and Limits views with 24-hour, 7-day, 30-day, and 90-day ranges. Cost
+is an API-equivalent estimate from local Codex token usage, not the amount
+billed to a ChatGPT plan. The model section shows only activity from
 the last 72 hours, and the theme button switches between light and dark mode.
 The settings (gear) panel offers Show Sections toggles for Balance, Credits,
 Usage breakdown, Local activity, and History. Group by Day averages
@@ -144,8 +148,8 @@ failures, and early-consumption eligibility remains controlled by the service.
 
 ## Releases
 
-v1.0.11 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.11/AIUsageTray-Windows.exe)
-from the [v1.0.11 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.11).
+v1.0.12 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.12/AIUsageTray-Windows.exe)
+from the [v1.0.12 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.12).
 Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API

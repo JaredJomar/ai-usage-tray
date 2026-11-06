@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 from math import isfinite
 from pathlib import Path
 from typing import Optional
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import pystray
 
 from config import AppConfig, load_config, save_config
@@ -101,7 +101,7 @@ class TrayManager:
         if self._config.launch_on_startup and not self._is_auto_start_enabled():
             self._set_auto_start(True)
 
-        icon = self._create_icon((68, 255, 68))
+        icon = self._create_icon()
         auto_start_checked = self._is_auto_start_enabled()
         menu = pystray.Menu(
             pystray.MenuItem("Show Dashboard", self._on_show_dashboard, default=True),
@@ -225,16 +225,7 @@ class TrayManager:
             Logger.error("tray", "Status update failed: {}".format(error))
     
     def _update_icon(self):
-        max_usage = self._get_max_usage()
-        
-        if max_usage >= 85:
-            color = (255, 68, 68)
-        elif max_usage >= 60:
-            color = (255, 170, 0)
-        else:
-            color = (68, 255, 68)
-        
-        icon = self._create_icon(color)
+        icon = self._create_icon()
         self._tray_icon.icon = icon
     
     def _update_tooltip(self):
@@ -261,6 +252,7 @@ class TrayManager:
         trimmed_credit = "RESETS: {}".format(credits)
 
         header = "CODEX USAGE"
+        icon_key = "ICON: 5h teal / 7d green"
         row_5h = self._format_usage_row("5h", h5, r5)
         row_7d = self._format_usage_row("7d", h7, r7)
 
@@ -271,12 +263,12 @@ class TrayManager:
 
         for credit_line in credit_lines:
             for status in variants:
-                candidate = "\n".join([header, row_5h, row_7d, credit_line, status])
+                candidate = "\n".join([header, row_5h, row_7d, icon_key, credit_line, status])
                 if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
                     return candidate
 
         # Last resort: lead with the shortest status so truncation cannot cut it.
-        return "\n".join([variants[-1], header, row_5h, row_7d])[:self.TOOLTIP_MAX_LENGTH]
+        return "\n".join([variants[-1], header, row_5h, row_7d, icon_key])[:self.TOOLTIP_MAX_LENGTH]
 
     def _status_variants(self) -> list[str]:
         """Status strings richest-first so trimming never loses the most useful form."""
@@ -418,12 +410,6 @@ class TrayManager:
         expiries = self._credit_expiries()
         return expiries[0][1] if expiries else None
     
-    def _get_max_usage(self) -> float:
-        max_usage = 0.0
-        if self._codex_data:
-            max_usage = max(max_usage, self._codex_data["five_hour"], self._codex_data["seven_day"])
-        return max_usage
-    
     def _check_notifications(self):
         if not self._codex_data:
             return
@@ -509,36 +495,39 @@ class TrayManager:
         except Exception as error:
             Logger.warn("main", "Native notification failed: {}".format(error))
     
-    def _create_icon(self, color: tuple) -> Image.Image:
+    def _create_icon(self) -> Image.Image:
         size = 64
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-
-        draw.ellipse(
-            [4, 4, size - 4, size - 4],
-            fill=color + (255,),
-            outline=(255, 255, 255, 60),
-            width=2,
+        usage = self._codex_data or {}
+        meters = (
+            (14, "five_hour", (32, 200, 236)),
+            (36, "seven_day", (48, 214, 163)),
         )
-
-        max_usage = self._get_max_usage()
-        text = "{}".format(int(max_usage))
-
-        try:
-            font = ImageFont.truetype("segoeui.ttf", 22)
-        except Exception:
-            try:
-                font = ImageFont.truetype("arial.ttf", 22)
-            except Exception:
-                font = ImageFont.load_default()
-
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (size - text_width) // 2
-        y = (size - text_height) // 2 - 2
-
-        draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+        for x, key, color in meters:
+            raw = usage.get(key)
+            value = float(raw) if isinstance(raw, (int, float)) and isfinite(raw) else None
+            if value is None:
+                color = (128, 139, 150)
+            # Dark outer stroke stays visible on a light taskbar; the pale
+            # inner stroke keeps the gauge readable on a dark taskbar.
+            draw.rounded_rectangle(
+                [x, 9, x + 13, 55], radius=5,
+                fill=(18, 28, 34, 24), outline=(25, 43, 50, 230), width=3,
+            )
+            draw.rounded_rectangle(
+                [x + 1, 10, x + 12, 54], radius=4,
+                outline=(229, 239, 240, 245), width=1,
+            )
+            # The short top cap gives the outline a gauge-like silhouette.
+            draw.line([x + 4, 13, x + 9, 13], fill=(229, 239, 240, 245), width=2)
+            if value is not None:
+                fill_height = round(36 * max(0.0, min(100.0, value)) / 100)
+                if fill_height:
+                    draw.rounded_rectangle(
+                        [x + 3, 52 - fill_height, x + 10, 52], radius=3,
+                        fill=color + (255,),
+                    )
 
         return image
     

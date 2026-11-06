@@ -277,11 +277,14 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertIsNotNone(scroll)
         self.assertTrue(scroll.widgetResizable())
 
-    def test_analytics_tabs_period_controls_and_sections_exist(self):
-        for name in ("usageTab", "period7D", "period1M", "periodCustom", "groupByDay"):
+    def test_analytics_tab_owns_range_controls_and_usage_keeps_its_history_grouping(self):
+        for name in ("usageTab", "analyticsTab", "groupByDay", "analytics24h", "analytics7D", "analytics30D", "analytics90D", "analyticsTokens", "analyticsLimits"):
             self.assertIsNotNone(self.window.findChild(QToolButton, name), name)
-        self.assertFalse(self.window.findChild(QToolButton, "periodCustom").isEnabled())
-        self.assertEqual(self.window.findChild(QToolButton, "periodCustom").toolTip(), "Custom range is not available")
+        for name in ("period7D", "period1M", "periodCustom"):
+            self.assertIsNone(self.window.findChild(QToolButton, name), name)
+        cost_button = self.window.findChild(QToolButton, "analyticsCost")
+        self.assertTrue(cost_button.isEnabled())
+        self.assertTrue(cost_button.isChecked())
         titles = [label.text() for label in self.window.findChildren(QLabel, "sectionTitle")]
         for expected in ("Balance", "Usage breakdown", "Local activity"):
             self.assertIn(expected, titles)
@@ -383,7 +386,7 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertNotIn("autoReloadValue", stylesheet)
         self.assertNotIn("availableFiveReset", stylesheet)
         self.assertIsNotNone(self.window.findChild(QLabel, "historyValue"))
-        self.assertIsNotNone(self.window.findChild(QToolButton, "period7D"))
+        self.assertIsNone(self.window.findChild(QToolButton, "period7D"))
 
     def test_reset_confirmation_is_centered_on_screen_and_above_dashboard(self):
         self.window._render({"five_hour": 25, "seven_day": 70, "reset_credits": 1}, LocalCodexSnapshot())
@@ -586,7 +589,7 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertEqual(self.window.findChild(QLabel, "creditsValue").text(), "Not available")
         self.assertEqual(self.window._plan.text(), "Plan: Not available")
 
-    def test_history_view_uses_real_snapshots_and_period_controls(self):
+    def test_history_view_uses_real_snapshots_and_group_by_day(self):
         now = datetime.now(timezone.utc)
         history = (
             UsageSnapshot((now - timedelta(days=1)).isoformat(), 40.0, None, None, 1),
@@ -600,9 +603,6 @@ class DashboardWidgetTests(unittest.TestCase):
         self.assertIn("snapshots", trend.text())
         self.assertTrue(any(block in trend.text() for block in "@#*+="))
 
-        self.window.findChild(QToolButton, "period1M").click()
-        self.assertIn("snapshots", trend.text())
-
         self.window.findChild(QToolButton, "groupByDay").click()
         self.assertIn("avg", trend.text())
         self.assertIn("sample", trend.text())
@@ -610,5 +610,4 @@ class DashboardWidgetTests(unittest.TestCase):
         stale = (UsageSnapshot((now - timedelta(days=20)).isoformat(), 10.0, None, None, 1),)
         with patch("dashboard.read_usage_snapshots", return_value=stale):
             self.window._render(None, LocalCodexSnapshot())
-        self.window.findChild(QToolButton, "period7D").click()
         self.assertEqual(trend.text(), "Usage history: no snapshots in selected period")
