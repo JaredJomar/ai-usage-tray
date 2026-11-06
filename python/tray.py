@@ -244,30 +244,18 @@ class TrayManager:
         h7 = int(self._codex_data["seven_day"])
         r5 = self._format_countdown(self._codex_data["five_hour_reset"])
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
-        credits = self._codex_data.get("reset_credits", 0)
-        nearest_credit_expiry = self._nearest_credit_expiry()
-        full_credit = "RESETS: {}".format(credits)
-        if nearest_credit_expiry:
-            full_credit += " | expires {}".format(self._format_countdown(nearest_credit_expiry))
-        trimmed_credit = "RESETS: {}".format(credits)
-
         header = "CODEX USAGE"
         icon_key = "ICON: 5h teal / 7d green"
         row_5h = self._format_usage_row("5h", h5, r5)
         row_7d = self._format_usage_row("7d", h7, r7)
 
         variants = self._status_variants()
-        credit_lines = [full_credit]
-        if trimmed_credit != full_credit:
-            credit_lines.append(trimmed_credit)
+        for status in variants:
+            candidate = "\n".join([status, header, row_5h, row_7d, icon_key])
+            if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
+                return candidate
 
-        for credit_line in credit_lines:
-            for status in variants:
-                candidate = "\n".join([header, row_5h, row_7d, icon_key, credit_line, status])
-                if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
-                    return candidate
-
-        # Last resort: lead with the shortest status so truncation cannot cut it.
+        # The status leads the tooltip, so Windows truncation preserves it.
         return "\n".join([variants[-1], header, row_5h, row_7d, icon_key])[:self.TOOLTIP_MAX_LENGTH]
 
     def _status_variants(self) -> list[str]:
