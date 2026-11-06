@@ -496,36 +496,32 @@ class TrayManager:
             Logger.warn("main", "Native notification failed: {}".format(error))
     
     def _create_icon(self) -> Image.Image:
-        size = 64
+        # pystray serializes this 256px source as a multi-resolution ICO so
+        # Windows can select a crisp frame for each taskbar scale.
+        size = 256
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
         usage = self._codex_data or {}
         meters = (
-            (14, "five_hour", (32, 200, 236)),
-            (36, "seven_day", (48, 214, 163)),
+            (12, "five_hour", (32, 200, 236)),
+            (132, "seven_day", (48, 214, 163)),
         )
         for x, key, color in meters:
             raw = usage.get(key)
             value = float(raw) if isinstance(raw, (int, float)) and isfinite(raw) else None
             if value is None:
                 color = (128, 139, 150)
-            # Dark outer stroke stays visible on a light taskbar; the pale
-            # inner stroke keeps the gauge readable on a dark taskbar.
+            # Broad gauges remain legible when Windows selects the 16px frame.
             draw.rounded_rectangle(
-                [x, 9, x + 13, 55], radius=5,
-                fill=(18, 28, 34, 24), outline=(25, 43, 50, 230), width=3,
+                [x, 8, x + 112, 248], radius=22,
+                fill=(18, 28, 34, 255), outline=(229, 239, 240, 255), width=8,
             )
-            draw.rounded_rectangle(
-                [x + 1, 10, x + 12, 54], radius=4,
-                outline=(229, 239, 240, 245), width=1,
-            )
-            # The short top cap gives the outline a gauge-like silhouette.
-            draw.line([x + 4, 13, x + 9, 13], fill=(229, 239, 240, 245), width=2)
+            draw.line([x + 32, 28, x + 80, 28], fill=(229, 239, 240, 255), width=8)
             if value is not None:
-                fill_height = round(36 * max(0.0, min(100.0, value)) / 100)
+                fill_height = round(194 * max(0.0, min(100.0, value)) / 100)
                 if fill_height:
                     draw.rounded_rectangle(
-                        [x + 3, 52 - fill_height, x + 10, 52], radius=3,
+                        [x + 16, 232 - fill_height, x + 96, 232], radius=14,
                         fill=color + (255,),
                     )
 

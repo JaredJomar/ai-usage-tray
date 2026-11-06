@@ -516,6 +516,11 @@ def _format_tokens(value: Optional[int]) -> str:
     return "{:,}".format(value)
 
 
+def _format_currency(value: float) -> str:
+    """Format the API-equivalent analytics estimate as USD."""
+    return "${:,.2f}".format(value)
+
+
 def _format_relative_time(value: Optional[str], now: Optional[datetime] = None) -> str:
     """Format a timestamp as a relative time string (e.g., 'just now', '5m ago', '2h 30m ago')."""
     if not value:
@@ -1790,12 +1795,8 @@ class DashboardWindow(QWidget):
             ]
             self._trend.setText("\n".join(lines))
             return
-        values = [entry.five_hour for entry in filtered if entry.five_hour is not None]
         if values:
-            blocks = ".:-=+*#@"
-            maximum = max(max(values), 1)
-            sparkline = "".join(blocks[min(7, int(value / maximum * 7))] for value in values)
-            self._trend.setText("5-hour usage history  {}   ({} snapshots)".format(sparkline, len(filtered)))
+            self._trend.setText("5-hour usage · {} snapshots".format(len(values)))
         else:
             self._trend.setText("Usage history: waiting for valid snapshots")
 
