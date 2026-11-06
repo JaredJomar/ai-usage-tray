@@ -9,7 +9,10 @@ from typing import Optional
 
 from analytics import CostAnalytics, calculate_cost_analytics
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QColor, QCursor, QFontDatabase, QPainter, QPen, QResizeEvent
+from PyQt6.QtGui import (
+    QColor, QCursor, QFontDatabase, QLinearGradient, QPainter, QPainterPath,
+    QPen, QResizeEvent,
+)
 from PyQt6.QtWidgets import (
     QApplication, QAbstractItemView, QButtonGroup, QCheckBox, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar, QPushButton,
@@ -145,6 +148,41 @@ class DashboardTheme:
         return cls.DARK_PALETTE if dark_mode else cls.LIGHT_PALETTE
 
 
+def _smooth_line_path(points: list[QPointF]) -> QPainterPath:
+    """Build a restrained cubic curve through chart points."""
+    path = QPainterPath()
+    if not points:
+        return path
+    path.moveTo(points[0])
+    for index in range(1, len(points)):
+        previous = points[index - 1]
+        current = points[index]
+        before = points[max(0, index - 2)]
+        after = points[min(len(points) - 1, index + 1)]
+        first_control = QPointF(
+            previous.x() + (current.x() - before.x()) / 6.0,
+            previous.y() + (current.y() - before.y()) / 6.0,
+        )
+        second_control = QPointF(
+            current.x() - (after.x() - previous.x()) / 6.0,
+            current.y() - (after.y() - previous.y()) / 6.0,
+        )
+        path.cubicTo(first_control, second_control, current)
+    return path
+
+
+def _area_gradient(color: QColor, top: int = 48) -> QLinearGradient:
+    gradient = QLinearGradient(0, 0, 0, 1)
+    gradient.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
+    upper = QColor(color)
+    upper.setAlpha(top)
+    lower = QColor(color)
+    lower.setAlpha(0)
+    gradient.setColorAt(0.0, upper)
+    gradient.setColorAt(1.0, lower)
+    return gradient
+
+
 class UsageHistoryChart(QWidget):
     """Small native line chart for locally recorded Codex usage snapshots."""
 
@@ -177,46 +215,65 @@ class UsageHistoryChart(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = self.rect().adjusted(12, 10, -12, -10)
+        bounds = QRectF(self.rect().adjusted(12, 8, -12, -8))
+        title_font = painter.font()
+        title_font.setBold(True)
+        painter.setFont(title_font)
         painter.setPen(QColor(self._palette["text"]))
         painter.drawText(QRectF(bounds.left(), bounds.top(), bounds.width(), 22),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._title)
-        chart = QRectF(bounds.left() + 34, bounds.top() + 34, bounds.width() - 44, bounds.height() - 60)
-        grid_pen = QPen(QColor(self._palette["border"]))
-        grid_pen.setWidth(1)
-        painter.setPen(grid_pen)
         max_value = max((max(values) for _, values, _ in self._series if values), default=0.0)
-        scale = 100.0 if self._percent else max(max_value, 1.0)
+        scale = 100.0 if self._percent else max(max_value * 1.15, 1.0)
         middle_label = "50%" if self._percent else self._format_axis(scale / 2, self._currency)
         top_label = "100%" if self._percent else self._format_axis(scale, self._currency)
         zero_label = "0%" if self._percent else self._format_axis(0, self._currency)
+        chart = QRectF(
+            bounds.left() + 48, bounds.top() + 34,
+            max(1.0, bounds.width() - 54), max(1.0, bounds.height() - 68),
+        )
+        grid_color = QColor(self._palette["border"])
+        grid_color.setAlpha(135)
+        grid_pen = QPen(grid_color, 1)
         for fraction, label in ((0.0, zero_label), (0.5, middle_label), (1.0, top_label)):
             y = chart.bottom() - fraction * chart.height()
+            painter.setPen(grid_pen)
             painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y))
             painter.setPen(QColor(self._palette["muted"]))
             painter.drawText(QRectF(bounds.left(), y - 8, 30, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
-            painter.setPen(grid_pen)
         if not any(values for _, values, _ in self._series):
             painter.setPen(QColor(self._palette["muted"]))
             painter.drawText(chart, Qt.AlignmentFlag.AlignCenter, "No local data in this period")
             return
-        for series_index, (name, values, color_name) in enumerate(self._series):
+        for name, values, color_name in self._series:
             if not values:
                 continue
             color = QColor(self._palette[color_name])
-            painter.setPen(QPen(color, 2))
-            painter.setBrush(color)
+            painter.setPen(Qt.PenStyle.NoPen)
             points = [QPointF(
-                chart.left() + (index / max(1, len(values) - 1)) * chart.width(),
+                chart.left() + (index / max(1, len(values) - 1) if len(values) > 1 else 0.5) * chart.width(),
                 chart.bottom() - max(0.0, min(scale, value)) / scale * chart.height(),
             ) for index, value in enumerate(values)]
-            for first, second in zip(points, points[1:]):
-                painter.drawLine(first, second)
+            line_path = _smooth_line_path(points)
+            if len(points) > 1:
+                area_path = QPainterPath(line_path)
+                area_path.lineTo(points[-1].x(), chart.bottom())
+                area_path.lineTo(points[0].x(), chart.bottom())
+                area_path.closeSubpath()
+                painter.fillPath(area_path, _area_gradient(color, 42))
+            painter.setPen(QPen(color, 2.5, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(line_path)
+            last = points[-1]
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self._palette["shell"]))
+            painter.drawEllipse(last, 5.0, 5.0)
+            painter.setBrush(color)
+            painter.drawEllipse(last, 3.0, 3.0)
         painter.setPen(QColor(self._palette["muted"]))
-        painter.drawText(QRectF(chart.left(), chart.bottom() + 3, 80, 18),
+        painter.drawText(QRectF(chart.left(), chart.bottom() + 5, 100, 18),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._x_labels[0])
-        painter.drawText(QRectF(chart.right() - 80, chart.bottom() + 3, 80, 18),
+        painter.drawText(QRectF(chart.right() - 100, chart.bottom() + 5, 100, 18),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._x_labels[1])
 
     @staticmethod
@@ -260,25 +317,36 @@ class UsageSparkline(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        chart = self.rect().adjusted(2, 6, -2, -6)
-        grid_pen = QPen(QColor(self._palette["border"]))
-        grid_pen.setWidth(1)
-        painter.setPen(grid_pen)
-        for fraction in (0.25, 0.75):
-            y = chart.top() + chart.height() * fraction
+        chart = QRectF(self.rect().adjusted(2, 5, -2, -7))
+        grid_color = QColor(self._palette["border"])
+        grid_color.setAlpha(115)
+        painter.setPen(QPen(grid_color, 1))
+        for fraction in (0.5, 1.0):
+            y = chart.bottom() - chart.height() * fraction
             painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y))
         if not self._values:
             return
         scale = 100.0
         points = [QPointF(
-            chart.left() + index / max(1, len(self._values) - 1) * chart.width(),
+            chart.left() + (index / max(1, len(self._values) - 1) if len(self._values) > 1 else 0.5) * chart.width(),
             chart.bottom() - max(0.0, min(scale, value)) / scale * chart.height(),
         ) for index, value in enumerate(self._values)]
-        painter.setPen(QPen(QColor(self._palette["accent"]), 2))
-        for first, second in zip(points, points[1:]):
-            painter.drawLine(first, second)
-        if len(points) == 1:
-            painter.drawPoint(points[0])
+        color = QColor(self._palette["accent"])
+        line_path = _smooth_line_path(points)
+        if len(points) > 1:
+            area_path = QPainterPath(line_path)
+            area_path.lineTo(points[-1].x(), chart.bottom())
+            area_path.lineTo(points[0].x(), chart.bottom())
+            area_path.closeSubpath()
+            painter.fillPath(area_path, _area_gradient(color, 44))
+        painter.setPen(QPen(color, 2.5, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawPath(line_path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._palette["shell"]))
+        painter.drawEllipse(points[-1], 4.5, 4.5)
+        painter.setBrush(color)
+        painter.drawEllipse(points[-1], 2.7, 2.7)
 
 
 class CostCompositionBar(QWidget):
