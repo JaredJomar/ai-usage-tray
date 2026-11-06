@@ -18,12 +18,6 @@ Windows system tray app for monitoring Codex limits and local AI token usage, wi
 - **Catppuccin Mocha** themed settings window with PyQt6
 - **Standalone .exe**, no Python installation required
 
-## Screenshots
-
-### Tray tooltip
-
-![AI Usage Tray tooltip](img/tray-tooltip.png)
-
 The tray icon uses a cyan left gauge for 5-hour usage and a green right gauge
 for weekly usage; each fill shows that window's used percentage. Reset-credit
 notifications appear 60, 30, 15, and 5 minutes
@@ -62,7 +56,7 @@ are separate from the Usage tab.
 
 ### Tray tooltip
 
-![Tray tooltip with sample status](img/tray-tooltip.png)
+![Tray tooltip with sample status](img/tray-tooltip-current.png)
 
 The dashboard keeps Usage and Analytics in separate tabs. Usage contains live
 limit cards, reset-credit details, local session activity, usage history, and
