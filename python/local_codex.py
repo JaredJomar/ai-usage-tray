@@ -74,6 +74,7 @@ class TokenUsageRecord:
 
 _TOKEN_USAGE_CACHE: dict[str, tuple[int, int, tuple[TokenUsageRecord, ...]]] = {}
 _TOKEN_USAGE_CACHE_LOCK = threading.Lock()
+_OPENCODE_USAGE_CACHE: tuple[int, int, int, int, tuple[TokenUsageRecord, ...]] | None = None
 
 
 def _nonnegative_token_count(value: Any) -> int:
@@ -171,6 +172,73 @@ def read_token_usage_records(codex_dir: Optional[Path] = None) -> tuple[TokenUsa
         except OSError:
             continue
     return tuple(sorted(records, key=lambda item: item.timestamp))
+
+
+def read_opencode_token_usage_records(
+    database: Optional[Path] = None, days: int = 100,
+) -> tuple[TokenUsageRecord, ...]:
+    """Read OpenCode model/token metadata, never message content."""
+    global _OPENCODE_USAGE_CACHE
+    path = database or (Path.home() / ".local" / "share" / "opencode" / "opencode.db")
+    try:
+        stat = path.stat()
+        wal_stat = Path(str(path) + "-wal").stat()
+    except OSError:
+        try:
+            stat = path.stat()
+            wal_stat = None
+        except OSError:
+            return ()
+    wal_mtime = wal_stat.st_mtime_ns if wal_stat else 0
+    wal_size = wal_stat.st_size if wal_stat else 0
+    with _TOKEN_USAGE_CACHE_LOCK:
+        cached = _OPENCODE_USAGE_CACHE
+        if cached and cached[:4] == (stat.st_mtime_ns, stat.st_size, wal_mtime, wal_size):
+            return cached[4]
+
+    # SQLite returns only these accounting fields. The JSON payload, which also
+    # contains message text and tool data, is never passed back to Python.
+    cutoff_ms = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    query = """SELECT session_id, time_created,
+        json_extract(data, '$.modelID'),
+        json_extract(data, '$.tokens.input'),
+        json_extract(data, '$.tokens.cache.read'),
+        json_extract(data, '$.tokens.cache.write'),
+        json_extract(data, '$.tokens.output')
+        FROM message
+        WHERE json_extract(data, '$.role') = 'assistant' AND time_created >= ?
+        ORDER BY time_created"""
+    records: list[TokenUsageRecord] = []
+    try:
+        connection = sqlite3.connect("file:{}?mode=ro".format(path.as_posix()), uri=True, timeout=2)
+        try:
+            for session_id, stamp, model, input_count, cached_count, write_count, output_count in connection.execute(query, (cutoff_ms,)):
+                if not isinstance(model, str) or not model.strip():
+                    continue
+                timestamp = _format_timestamp(stamp)
+                if not timestamp:
+                    continue
+                input_tokens = _nonnegative_token_count(input_count)
+                cached_tokens = _nonnegative_token_count(cached_count)
+                write_tokens = _nonnegative_token_count(write_count)
+                records.append(TokenUsageRecord(
+                    timestamp=timestamp,
+                    session_id="opencode:" + str(session_id),
+                    model=model.strip(),
+                    input_tokens=input_tokens + cached_tokens + write_tokens,
+                    cached_input_tokens=cached_tokens,
+                    cache_write_input_tokens=write_tokens,
+                    output_tokens=_nonnegative_token_count(output_count),
+                ))
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error):
+        return ()
+
+    result = tuple(sorted(records, key=lambda item: item.timestamp))
+    with _TOKEN_USAGE_CACHE_LOCK:
+        _OPENCODE_USAGE_CACHE = (stat.st_mtime_ns, stat.st_size, wal_mtime, wal_size, result)
+    return result
 
 
 def _as_datetime(value: Any) -> Optional[datetime]:

@@ -27,6 +27,7 @@ from local_codex import (
     TokenUsageRecord,
     UsageSnapshot,
     read_local_codex_snapshot,
+    read_opencode_token_usage_records,
     read_token_usage_records,
     read_usage_snapshots,
     record_usage_snapshot,
@@ -812,7 +813,10 @@ class DashboardRefreshWorker(QThread):
     def run(self) -> None:
         try:
             local = read_local_codex_snapshot()
-            token_usage_records = read_token_usage_records()
+            token_usage_records = tuple(sorted(
+                read_token_usage_records() + read_opencode_token_usage_records(),
+                key=lambda item: item.timestamp,
+            ))
             usage = None
             result = None
             if self._config.codex_enabled:
@@ -1204,7 +1208,7 @@ class DashboardWindow(QWidget):
         cost_details.addWidget(self._analytics_cost_note)
         analytics.addWidget(self._analytics_cost_details)
         self._analytics_note = QLabel(
-            "Cost is an API-equivalent estimate from local Codex token records, not your plan invoice.",
+            "Cost is an API-equivalent estimate from local Codex and OpenCode token records, not your plan invoice.",
             objectName="muted",
         )
         self._analytics_note.setWordWrap(True)
@@ -1715,7 +1719,7 @@ class DashboardWindow(QWidget):
             self._analytics_total_sessions.setText(str(cost_data.sessions))
             self._analytics_summary.setText(
                 "API-equivalent estimate · USD · {} local responses in this period".format(cost_data.responses)
-                if has_priced_cost else "No priced local Codex responses were found in this period."
+                if has_priced_cost else "No priced local Codex or OpenCode responses were found in this period."
             )
             self._set_cost_detail_values(cost_data, as_tokens=True)
             self._set_model_table(cost_data, share_by_tokens=False)

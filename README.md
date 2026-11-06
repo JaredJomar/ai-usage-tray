@@ -50,8 +50,9 @@ The dashboard opens from the tray icon as Codex Usage and has two tabs: Usage
 retains live limit cards, reset-credit details, local session activity, usage
 history, and locally observed token/model metadata; Analytics contains Cost,
 Tokens, and Limits views with 24-hour, 7-day, 30-day, and 90-day ranges. Cost
-is an API-equivalent estimate from local Codex token usage, not the amount
-billed to a ChatGPT plan. The model section shows only activity from
+is an API-equivalent estimate from local Codex and OpenCode token usage, not
+the amount billed to a ChatGPT plan or another subscription. OpenCode
+accounting reads only model and token metadata from its local database. The model section shows only activity from
 the last 72 hours, and the theme button switches between light and dark mode.
 The settings (gear) panel offers Show Sections toggles for Balance, Credits,
 Usage breakdown, Local activity, and History. Group by Day averages
