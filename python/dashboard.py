@@ -1,6 +1,7 @@
 """Isolated Qt dashboard process for Codex usage and local activity metadata."""
 from __future__ import annotations
 
+import math
 import sys
 import uuid
 from dataclasses import dataclass, replace
@@ -10,8 +11,8 @@ from typing import Optional
 from analytics import CostAnalytics, calculate_cost_analytics
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import (
-    QColor, QCursor, QFontDatabase, QLinearGradient, QPainter, QPainterPath,
-    QPen, QResizeEvent,
+    QColor, QCursor, QFontDatabase, QIcon, QLinearGradient, QPainter,
+    QPainterPath, QPen, QPixmap, QResizeEvent,
 )
 from PyQt6.QtWidgets import (
     QApplication, QAbstractItemView, QButtonGroup, QCheckBox, QFrame, QGridLayout,
@@ -928,7 +929,7 @@ class DashboardWindow(QWidget):
         self._refresh_button.clicked.connect(self.refresh)
         header.addWidget(self._refresh_button, alignment=Qt.AlignmentFlag.AlignTop)
         self._settings_button = QToolButton(objectName="settingsToggle")
-        self._settings_button.setText("⚙")
+        self._settings_button.setIconSize(QSize(18, 18))
         self._settings_button.setToolTip("Toggle dashboard settings")
         self._settings_button.setAccessibleName("Toggle dashboard settings")
         self._settings_button.setCheckable(True)
@@ -936,6 +937,7 @@ class DashboardWindow(QWidget):
         self._settings_button.toggled.connect(self._toggle_settings_panel)
         header.addWidget(self._settings_button, alignment=Qt.AlignmentFlag.AlignTop)
         self._theme_button = QToolButton(objectName="themeToggle")
+        self._theme_button.setIconSize(QSize(18, 18))
         self._theme_button.clicked.connect(self._toggle_dark_mode)
         self._apply_theme()
         header.addWidget(self._theme_button, alignment=Qt.AlignmentFlag.AlignTop)
@@ -1346,14 +1348,67 @@ class DashboardWindow(QWidget):
         if hasattr(self, "_history_chart") and hasattr(self, "_last_state"):
             self._update_history()
         if hasattr(self, "_theme_button"):
+            self._settings_button.setIcon(
+                self._header_icon("settings", palette["muted"]),
+            )
             if self._config.dark_mode:
-                self._theme_button.setText("☀")
+                self._theme_button.setIcon(
+                    self._header_icon("sun", palette["accent"]),
+                )
                 self._theme_button.setToolTip("Switch to light mode")
                 self._theme_button.setAccessibleName("Switch to light mode")
             else:
-                self._theme_button.setText("☾")
+                self._theme_button.setIcon(
+                    self._header_icon("moon", palette["accent"]),
+                )
                 self._theme_button.setToolTip("Switch to dark mode")
                 self._theme_button.setAccessibleName("Switch to dark mode")
+
+    @staticmethod
+    def _header_icon(kind: str, color: str) -> QIcon:
+        """Paint header symbols as vectors without depending on font glyphs."""
+        pixmap = QPixmap(48, 48)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        stroke = QColor(color)
+        pen = QPen(stroke, 4.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        center = 24.0
+
+        if kind == "settings":
+            painter.drawEllipse(QRectF(16, 16, 16, 16))
+            painter.drawEllipse(QRectF(21, 21, 6, 6))
+            for step in range(8):
+                angle = math.pi * step / 4
+                painter.drawLine(
+                    round(center + math.cos(angle) * 10),
+                    round(center + math.sin(angle) * 10),
+                    round(center + math.cos(angle) * 18),
+                    round(center + math.sin(angle) * 18),
+                )
+        elif kind == "sun":
+            painter.drawEllipse(QRectF(17, 17, 14, 14))
+            for step in range(8):
+                angle = math.pi * step / 4
+                painter.drawLine(
+                    round(center + math.cos(angle) * 13),
+                    round(center + math.sin(angle) * 13),
+                    round(center + math.cos(angle) * 20),
+                    round(center + math.sin(angle) * 20),
+                )
+        elif kind == "moon":
+            outer = QPainterPath()
+            outer.addEllipse(QRectF(10, 8, 28, 32))
+            cutout = QPainterPath()
+            cutout.addEllipse(QRectF(21, 3, 24, 27))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.fillPath(outer.subtracted(cutout), stroke)
+        painter.end()
+        return QIcon(pixmap)
 
     def _apply_toggle_colors(self) -> None:
         """Feed the active theme palette to the painted section switches."""

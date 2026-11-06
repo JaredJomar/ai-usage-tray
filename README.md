@@ -1,13 +1,10 @@
 # AI Usage Tray
 
-Windows system tray app for monitoring OpenAI Codex usage, with browser-based PKCE authentication.
+Windows system tray app for monitoring Codex limits and local AI token usage, with browser-based PKCE authentication.
 
 ## Features
 
-- **System tray icon** that changes color based on usage:
-  - 🟢 Green: 0-59%
-  - 🟠 Orange: 60-84%
-  - 🔴 Red: 85%+
+- **System tray icon** with separate 5-hour and weekly meters, rendered at multiple Windows icon sizes.
 - **Tooltip with compact progress bars** and reset countdowns
 - **Browser-based OAuth** with PKCE (no device codes)
 - **Codex Usage dashboard** with live usage display (5h hourly + 7d weekly windows)
@@ -38,31 +35,48 @@ Choose **Use reset** in the dashboard to redeem a credit before it expires,
 even with remaining balance above 0%. The app does not require either usage
 window to be exhausted; the service still decides whether to accept the request.
 
-### Dashboard — dark mode
+## Screenshots
 
-![AI Usage Tray dashboard in dark mode](img/dashboard-dark.png)
+Screenshots use sample values and contain no local account or usage data.
 
-### Dashboard — light mode
+The app icon uses the same cyan and green meters as the tray status icon. The
+ICO includes 16, 24, 32, 48, 64, 128, and 256 pixel variants.
 
-![AI Usage Tray dashboard in light mode](img/dashboard-light.png)
+<img src="img/app-icon.png" width="128" alt="AI Usage Tray app icon">
 
-The dashboard opens from the tray icon as Codex Usage and has two tabs: Usage
-retains live limit cards, reset-credit details, local session activity, usage
-history, and locally observed token/model metadata; Analytics contains Cost,
-Tokens, and Limits views with 24-hour, 7-day, 30-day, and 90-day ranges. Cost
-is an API-equivalent estimate from local Codex and OpenCode token usage, not
-the amount billed to a ChatGPT plan or another subscription. OpenCode
-accounting reads only model and token metadata from its local database. The model section shows only activity from
-the last 72 hours, and the theme button switches between light and dark mode.
-The settings (gear) panel offers Show Sections toggles for Balance, Credits,
-Usage breakdown, Local activity, and History. Group by Day averages
-usage snapshots per day and is shown only when History is visible.
+### Usage
+
+| Dark mode | Light mode |
+| --- | --- |
+| ![Usage tab in dark mode](img/dashboard-dark.png) | ![Usage tab in light mode](img/dashboard-light.png) |
+
+### Analytics
+
+Analytics includes cost estimates and token totals, daily charts, type
+breakdowns, and model rankings. Its 24-hour, 7-day, 30-day, and 90-day ranges
+are separate from the Usage tab.
+
+| Dark mode | Light mode |
+| --- | --- |
+| ![Analytics tab in dark mode](img/analytics-dark.png) | ![Analytics tab in light mode](img/analytics-light.png) |
+
+### Tray tooltip
+
+![Tray tooltip with sample status](img/tray-tooltip.png)
+
+The dashboard keeps Usage and Analytics in separate tabs. Usage contains live
+limit cards, reset-credit details, local session activity, usage history, and
+locally observed token/model metadata. Analytics estimates API-equivalent USD
+cost from local Codex and OpenCode token records; it does not show subscription
+charges. OpenCode accounting reads only model and token metadata from its local
+database. Free or unknown models remain unpriced rather than receiving a
+fabricated cost. The settings panel controls visibility of Usage sections,
+and Group by Day averages saved snapshots when History is visible.
 
 Local activity is collected read-only from Codex metadata under `~/.codex`,
-including the local `state_5.sqlite` database and eligible rollout JSONL files.
-The app uses aggregate session, token, model, and rate-limit metadata; it does
-not read prompts, messages, or history text. Local rate-limit values are
-observations from Codex files, while current usage is fetched from the Wham API.
+including `state_5.sqlite` and eligible rollout JSONL files. The app uses
+aggregate session, token, model, and rate-limit metadata; it does not read
+prompts or message text. Current limits are fetched from the Wham API.
 
 ## Quick Start
 
@@ -149,8 +163,8 @@ failures, and early-consumption eligibility remains controlled by the service.
 
 ## Releases
 
-v1.0.14 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.14/AIUsageTray-Windows.exe)
-from the [v1.0.14 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.14).
+v1.0.13 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.13/AIUsageTray-Windows.exe)
+from the [v1.0.13 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.13).
 Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API
@@ -181,7 +195,7 @@ AI-Usage-Tray/
 │   ├── tray.py              # Tray icon, tooltip, menu, auto-start
 │   ├── dashboard.py         # PyQt6 usage dashboard and local activity views
 │   ├── settings_window.py   # PyQt6 settings with live usage display
-│   ├── local_codex.py       # Read-only local Codex metadata and snapshots
+│   ├── local_codex.py       # Read-only Codex and OpenCode usage metadata
 │   ├── cache.py             # TTL cache with atomic writes
 │   ├── logger.py            # File logging
 │   ├── providers/

@@ -7,3 +7,4 @@ build/
 *.exe
 .omo/
 python/dist-onedir-final/
+python/build-onedir/
