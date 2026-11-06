@@ -16,6 +16,9 @@ Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
+CloseApplications=yes
+CloseApplicationsFilter=AIUsageTray.exe
+RestartApplications=no
 UninstallDisplayName={#MyAppName} version {#MyAppVersion}
 
 [Files]
