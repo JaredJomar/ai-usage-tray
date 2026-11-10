@@ -245,7 +245,9 @@ class TrayManager:
         r5 = self._format_countdown(self._codex_data["five_hour_reset"])
         r7 = self._format_countdown(self._codex_data["seven_day_reset"])
         header = "CODEX USAGE"
-        icon_key = "ICON: 5h teal / 7d green"
+        color_5h = self._usage_meter_profile(h5, "five_hour")[1]
+        color_7d = self._usage_meter_profile(h7, "seven_day")[1]
+        icon_key = "ICON: 5h {} / 7d {}".format(color_5h, color_7d)
         row_5h = self._format_usage_row("5h", h5, r5)
         row_7d = self._format_usage_row("7d", h7, r7)
 
@@ -490,17 +492,14 @@ class TrayManager:
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
         usage = self._codex_data or {}
-        meters = (
-            (12, "five_hour", (32, 200, 236)),
-            (132, "seven_day", (48, 214, 163)),
-        )
-        for x, key, base_color in meters:
+        meters = ((12, "five_hour"), (132, "seven_day"))
+        for x, key in meters:
             raw = usage.get(key)
             value = float(raw) if isinstance(raw, (int, float)) and isfinite(raw) else None
             if value is None:
                 color = (128, 139, 150)
             else:
-                color = self._usage_meter_color(value, base_color)
+                color, _ = self._usage_meter_profile(value, key)
             # Broad gauges remain legible when Windows selects the 16px frame.
             draw.rounded_rectangle(
                 [x, 8, x + 112, 248], radius=22,
@@ -518,19 +517,40 @@ class TrayManager:
         return image
 
     @staticmethod
-    def _usage_meter_color(value: float, base_color: tuple[int, int, int]) -> tuple[int, int, int]:
-        """Shift each usage gauge from its identity color through amber to red."""
+    def _usage_meter_profile(
+        value: float, window: str,
+    ) -> tuple[tuple[int, int, int], str]:
+        """Return a window-specific progressive color and its tooltip name."""
         percentage = max(0.0, min(100.0, value))
-        amber = (255, 190, 72)
-        red = (245, 78, 88)
-        if percentage <= 50:
-            start, end, progress = base_color, amber, percentage / 50
-        else:
-            start, end, progress = amber, red, (percentage - 50) / 50
-        return tuple(
-            round(start[channel] + (end[channel] - start[channel]) * progress)
+        ramps = {
+            "five_hour": (
+                (0, (32, 200, 236), "teal"),
+                (35, (62, 139, 255), "blue"),
+                (65, (153, 105, 255), "violet"),
+                (85, (238, 82, 139), "rose"),
+                (100, (245, 74, 92), "red"),
+            ),
+            "seven_day": (
+                (0, (48, 214, 163), "green"),
+                (35, (145, 211, 77), "lime"),
+                (65, (218, 201, 65), "yellow"),
+                (85, (255, 160, 57), "orange"),
+                (100, (231, 91, 58), "copper"),
+            ),
+        }
+        ramp = ramps[window]
+        start_index = max(
+            index for index, stop in enumerate(ramp) if percentage >= stop[0]
+        )
+        start_stop = ramp[start_index]
+        end_stop = ramp[min(start_index + 1, len(ramp) - 1)]
+        span = end_stop[0] - start_stop[0]
+        progress = (percentage - start_stop[0]) / span if span else 0.0
+        color = tuple(
+            round(start_stop[1][channel] + (end_stop[1][channel] - start_stop[1][channel]) * progress)
             for channel in range(3)
         )
+        return color, start_stop[2]
     
     def _on_refresh(self, icon, item):
         threading.Thread(target=self._refresh_usage, daemon=True).start()
