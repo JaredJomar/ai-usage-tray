@@ -494,11 +494,13 @@ class TrayManager:
             (12, "five_hour", (32, 200, 236)),
             (132, "seven_day", (48, 214, 163)),
         )
-        for x, key, color in meters:
+        for x, key, base_color in meters:
             raw = usage.get(key)
             value = float(raw) if isinstance(raw, (int, float)) and isfinite(raw) else None
             if value is None:
                 color = (128, 139, 150)
+            else:
+                color = self._usage_meter_color(value, base_color)
             # Broad gauges remain legible when Windows selects the 16px frame.
             draw.rounded_rectangle(
                 [x, 8, x + 112, 248], radius=22,
@@ -514,6 +516,21 @@ class TrayManager:
                     )
 
         return image
+
+    @staticmethod
+    def _usage_meter_color(value: float, base_color: tuple[int, int, int]) -> tuple[int, int, int]:
+        """Shift each usage gauge from its identity color through amber to red."""
+        percentage = max(0.0, min(100.0, value))
+        amber = (255, 190, 72)
+        red = (245, 78, 88)
+        if percentage <= 50:
+            start, end, progress = base_color, amber, percentage / 50
+        else:
+            start, end, progress = amber, red, (percentage - 50) / 50
+        return tuple(
+            round(start[channel] + (end[channel] - start[channel]) * progress)
+            for channel in range(3)
+        )
     
     def _on_refresh(self, icon, item):
         threading.Thread(target=self._refresh_usage, daemon=True).start()
