@@ -247,18 +247,42 @@ class TrayManager:
         header = "CODEX USAGE"
         color_5h = self._usage_meter_profile(h5, "five_hour")[1]
         color_7d = self._usage_meter_profile(h7, "seven_day")[1]
-        icon_key = "ICON: 5h {} / 7d {}".format(color_5h, color_7d)
+        colors_line = "COLORS: 5h {} / 7d {}".format(color_5h, color_7d)
         row_5h = self._format_usage_row("5h", h5, r5)
         row_7d = self._format_usage_row("7d", h7, r7)
+        compact_row_5h = "5h [{}] {}% · {}".format(
+            self._get_progress_bar(h5), h5, r5,
+        )
+        compact_row_7d = "7d [{}] {}% · {}".format(
+            self._get_progress_bar(h7), h7, r7,
+        )
+
+        credits = self._codex_data.get("reset_credits")
+        if isinstance(credits, bool) or not isinstance(credits, (int, float)):
+            credits = len(self._credit_expiries())
+        credits = max(0, int(credits))
+        credits_line = "RESETS AVAILABLE: {}".format(credits)
+        nearest_expiry = self._nearest_credit_expiry()
+        if nearest_expiry:
+            credits_line += " · next {}".format(self._format_countdown(nearest_expiry))
 
         variants = self._status_variants()
         for status in variants:
-            candidate = "\n".join([status, header, row_5h, row_7d, icon_key])
-            if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
-                return candidate
+            for first_row, second_row in (
+                (row_5h, row_7d), (compact_row_5h, compact_row_7d),
+            ):
+                for reset_line in (credits_line, "RESETS AVAILABLE: {}".format(credits)):
+                    candidate = "\n".join([
+                        status, header, first_row, second_row, reset_line, colors_line,
+                    ])
+                    if len(candidate) <= self.TOOLTIP_MAX_LENGTH:
+                        return candidate
 
         # The status leads the tooltip, so Windows truncation preserves it.
-        return "\n".join([variants[-1], header, row_5h, row_7d, icon_key])[:self.TOOLTIP_MAX_LENGTH]
+        return "\n".join([
+            variants[-1], header, compact_row_5h, compact_row_7d,
+            "RESETS AVAILABLE: {}".format(credits), colors_line,
+        ])[:self.TOOLTIP_MAX_LENGTH]
 
     def _status_variants(self) -> list[str]:
         """Status strings richest-first so trimming never loses the most useful form."""

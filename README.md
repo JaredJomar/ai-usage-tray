@@ -157,8 +157,8 @@ failures, and early-consumption eligibility remains controlled by the service.
 
 ## Releases
 
-v1.0.14 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.14/AIUsageTray-Windows.exe)
-from the [v1.0.14 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.14).
+v1.0.15 Windows installer: [AIUsageTray-Windows.exe](https://github.com/JaredJomar/ai-usage-tray/releases/download/v1.0.15/AIUsageTray-Windows.exe)
+from the [v1.0.15 release](https://github.com/JaredJomar/ai-usage-tray/releases/tag/v1.0.15).
 Built from `Installer/AIUsageTray-Windows.exe` via `Installer/AIUsageTray.iss`.
 
 ## API
