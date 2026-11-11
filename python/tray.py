@@ -247,31 +247,35 @@ class TrayManager:
         header = "CODEX USAGE"
         color_5h = self._usage_meter_profile(h5, "five_hour")[1]
         color_7d = self._usage_meter_profile(h7, "seven_day")[1]
-        colors_line = "COLORS: 5h {} / 7d {}".format(color_5h, color_7d)
+        colors_line = "COLORS 5h {}/7d {}".format(color_5h, color_7d)
         row_5h = self._format_usage_row("5h", h5, r5)
         row_7d = self._format_usage_row("7d", h7, r7)
         compact_row_5h = "5h [{}] {}% · {}".format(
-            self._get_progress_bar(h5), h5, r5,
+            self._get_compact_progress_bar(h5), h5, r5.split()[0],
         )
         compact_row_7d = "7d [{}] {}% · {}".format(
-            self._get_progress_bar(h7), h7, r7,
+            self._get_compact_progress_bar(h7), h7, r7.split()[0],
         )
 
         credits = self._codex_data.get("reset_credits")
         if isinstance(credits, bool) or not isinstance(credits, (int, float)):
             credits = len(self._credit_expiries())
         credits = max(0, int(credits))
-        credits_line = "RESETS AVAILABLE: {}".format(credits)
+        credits_label = (
+            "1 reset available" if credits == 1
+            else "{} resets available".format(credits)
+        )
+        credits_line = credits_label
         nearest_expiry = self._nearest_credit_expiry()
         if nearest_expiry:
-            credits_line += " · next {}".format(self._format_countdown(nearest_expiry))
+            credits_line += " · expires {}".format(self._format_countdown(nearest_expiry))
 
         variants = self._status_variants()
         for status in variants:
-            for first_row, second_row in (
-                (row_5h, row_7d), (compact_row_5h, compact_row_7d),
-            ):
-                for reset_line in (credits_line, "RESETS AVAILABLE: {}".format(credits)):
+            for reset_line in (credits_line, credits_label):
+                for first_row, second_row in (
+                    (row_5h, row_7d), (compact_row_5h, compact_row_7d),
+                ):
                     candidate = "\n".join([
                         status, header, first_row, second_row, reset_line, colors_line,
                     ])
@@ -281,7 +285,7 @@ class TrayManager:
         # The status leads the tooltip, so Windows truncation preserves it.
         return "\n".join([
             variants[-1], header, compact_row_5h, compact_row_7d,
-            "RESETS AVAILABLE: {}".format(credits), colors_line,
+            credits_label, colors_line,
         ])[:self.TOOLTIP_MAX_LENGTH]
 
     def _status_variants(self) -> list[str]:
@@ -307,6 +311,8 @@ class TrayManager:
         if result.status == STATUS_AUTH_REQUIRED:
             if age and not compact:
                 return "Login required · {}".format(age)
+            if age:
+                return "Login · {}".format(age)
             return "Login required"
         if result.status == STATUS_API_ERROR:
             return "Refresh failed"
@@ -351,6 +357,11 @@ class TrayManager:
         filled = int(percentage / 100.0 * 6)
         filled = max(0, min(6, filled))
         return "#" * filled + "-" * (6 - filled)
+
+    @staticmethod
+    def _get_compact_progress_bar(percentage: float) -> str:
+        filled = max(0, min(4, int(percentage / 100.0 * 4)))
+        return "#" * filled + "-" * (4 - filled)
     
     def _format_countdown(self, timestamp) -> str:
         reset_time = self._parse_timestamp(timestamp)

@@ -646,6 +646,8 @@ def _refresh_status_text(
             return "Current limits loaded", ""
         return "Current limits unavailable; local metadata shown", ""
     age = _format_epoch_age(result.last_success, now)
+    if result.detail == "Showing saved data while checking for updates":
+        return "Showing saved limits from {}".format(age), result.detail
     if result.status == STATUS_FRESH:
         return "Current limits updated {}".format(age), result.detail
     if result.status == STATUS_STALE:
@@ -805,6 +807,7 @@ def build_dashboard_state(
 
 
 class DashboardRefreshWorker(QThread):
+    cached = pyqtSignal(object, object, object, object)
     refreshed = pyqtSignal(object, object, object, object)
 
     def __init__(self, config: AppConfig):
@@ -813,6 +816,19 @@ class DashboardRefreshWorker(QThread):
 
     def run(self) -> None:
         try:
+            cache = CacheManager(self._config.cache_ttl_seconds)
+            cached = cache.get_entry("codex") if self._config.codex_enabled else None
+            if cached is not None:
+                cached_result = FetchResult(
+                    STATUS_FRESH if cached.fresh else STATUS_STALE,
+                    cached.data,
+                    cached.saved_at,
+                    "Showing saved data while checking for updates",
+                )
+                self.cached.emit(
+                    cached.data, LocalCodexSnapshot(), cached_result, (),
+                )
+
             local = read_local_codex_snapshot()
             token_usage_records = tuple(sorted(
                 read_token_usage_records() + read_opencode_token_usage_records(),
@@ -821,11 +837,9 @@ class DashboardRefreshWorker(QThread):
             usage = None
             result = None
             if self._config.codex_enabled:
-                cache = CacheManager(self._config.cache_ttl_seconds)
-                cached = cache.get_cached("codex")
                 result = CodexProvider(cache).fetch_result()
                 usage = result.usage
-                if cached is None and result.status == STATUS_FRESH:
+                if (cached is None or not cached.fresh) and result.status == STATUS_FRESH:
                     record_usage_snapshot(usage, local)
             self.refreshed.emit(usage, local, result, token_usage_records)
         except Exception as error:
@@ -859,6 +873,7 @@ class DashboardResetWorker(QThread):
 
 class DashboardWindow(QWidget):
     STATUS_TICK_MS = 30000
+    AUTO_REFRESH_MIN_MS = 60000
 
     def __init__(self, config: AppConfig, anchor: Optional[QPoint] = None):
         super().__init__()
@@ -881,6 +896,13 @@ class DashboardWindow(QWidget):
         self._status_timer.setInterval(self.STATUS_TICK_MS)
         self._status_timer.timeout.connect(self._update_status_display)
         self._status_timer.start()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(max(
+            self.AUTO_REFRESH_MIN_MS,
+            int(self._config.refresh_interval_seconds * 1000),
+        ))
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.start()
         # Defer initial refresh until event loop is running (queued after startup)
         QTimer.singleShot(0, self._schedule_initial_refresh)
 
@@ -1562,10 +1584,12 @@ class DashboardWindow(QWidget):
         )
         self._reset_worker.consumed.connect(self._reset_finished)
         self._reset_worker.finished.connect(self._reset_worker.deleteLater)
+        self._reset_worker.finished.connect(self._reset_worker_finished)
         self._reset_worker.start()
 
     def _reset_finished(self, result: ResetConsumeResult) -> None:
-        self._reset_worker = None
+        if self._closing:
+            return
         if result.status in ("reset", "alreadyRedeemed"):
             self._last_usage = None
             self._render_reset_button_state()
@@ -1580,6 +1604,13 @@ class DashboardWindow(QWidget):
         self._status.setToolTip(message)
         QMessageBox.warning(self, "Reset credit not used", message)
         self._render_reset_button_state()
+
+    def _reset_worker_finished(self) -> None:
+        self._reset_worker = None
+        if self._closing:
+            self._finish_close_if_idle()
+        else:
+            self._render_reset_button_state()
 
     def _make_history_card(self) -> QFrame:
         frame = QFrame(objectName="usageCard")
@@ -1643,20 +1674,31 @@ class DashboardWindow(QWidget):
         self._status.setText("Refreshing current limits…")
         self._status.setToolTip("")
         self._worker = DashboardRefreshWorker(self._config)
+        self._worker.cached.connect(self._render)
         self._worker.refreshed.connect(self._render)
         self._worker.finished.connect(self._refresh_finished)
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     def _refresh_finished(self) -> None:
         self._refresh_button.setEnabled(True)
+        self._worker = None
         if self._closing:
-            self.deleteLater()
-            application = QApplication.instance()
-            if application:
-                application.quit()
+            self._finish_close_if_idle()
         elif self._refresh_after_reset:
             self._refresh_after_reset = False
             self.refresh()
+
+    def _finish_close_if_idle(self) -> None:
+        workers = (self._worker, self._reset_worker)
+        if not self._closing or any(
+            worker is not None and worker.isRunning() for worker in workers
+        ):
+            return
+        self.deleteLater()
+        application = QApplication.instance()
+        if application:
+            application.quit()
 
     def _render(
         self, usage: Optional[dict], local: LocalCodexSnapshot,
@@ -1955,19 +1997,23 @@ class DashboardWindow(QWidget):
         self.move(calculate_popup_position(active_anchor, self.size(), available))
 
     def closeEvent(self, event) -> None:
-        if self._worker and self._worker.isRunning():
-            self._closing = True
-            self._worker.requestInterruption()
-            self._worker.terminate()
-            self._worker.wait(1000)
+        self._closing = True
+        self._status_timer.stop()
+        self._refresh_timer.stop()
+        if any(
+            worker is not None and worker.isRunning()
+            for worker in (self._worker, self._reset_worker)
+        ):
+            self.hide()
+            event.accept()
+            return
         event.accept()
-        application = QApplication.instance()
-        if application:
-            application.quit()
+        self._finish_close_if_idle()
 
 
 def show_dashboard(config: AppConfig, anchor: Optional[QPoint] = None) -> None:
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     window = DashboardWindow(config, anchor)
     window.place_near_anchor(anchor)
     window.show()

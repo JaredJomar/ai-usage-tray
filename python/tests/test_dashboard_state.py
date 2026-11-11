@@ -224,7 +224,7 @@ class DashboardWidgetTests(unittest.TestCase):
         light = DashboardTheme.LIGHT_PALETTE
         self.assertIn("background: transparent;", self.window.styleSheet())
         self.assertTrue(self.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
-        self.assertEqual(self.window._theme_button.text(), "☾")
+        self.assertFalse(self.window._theme_button.icon().isNull())
         self.assertEqual(self.window._theme_button.toolTip(), "Switch to dark mode")
         self.assertEqual(self.window._theme_button.accessibleName(), "Switch to dark mode")
 
@@ -236,7 +236,7 @@ class DashboardWidgetTests(unittest.TestCase):
 
         dark = DashboardTheme.DARK_PALETTE
         self.assertIn("background: transparent;", self.window.styleSheet())
-        self.assertEqual(self.window._theme_button.text(), "☀")
+        self.assertFalse(self.window._theme_button.icon().isNull())
         self.assertEqual(self.window._theme_button.toolTip(), "Switch to light mode")
         self.assertEqual(self.window._theme_button.accessibleName(), "Switch to light mode")
         self.assertTrue(self.window._config.dark_mode)
@@ -438,6 +438,7 @@ class DashboardWidgetTests(unittest.TestCase):
     def test_confirmed_unexhausted_weekly_window_attempts_consume_and_shows_rejection(self):
         usage = {"five_hour": 25, "seven_day": 70, "reset_credits": 1}
         with patch("dashboard.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes), \
+             patch("dashboard.QMessageBox.warning"), \
              patch(
                  "dashboard.CodexProvider.consume_reset_credit",
                  return_value=ResetConsumeResult("api_error", "API returned HTTP 403"),
@@ -601,7 +602,7 @@ class DashboardWidgetTests(unittest.TestCase):
 
         trend = self.window.findChild(QLabel, "historyValue")
         self.assertIn("snapshots", trend.text())
-        self.assertTrue(any(block in trend.text() for block in "@#*+="))
+        self.assertEqual(self.window._history_chart._values, [40.0, 80.0])
 
         self.window.findChild(QToolButton, "groupByDay").click()
         self.assertIn("avg", trend.text())

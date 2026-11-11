@@ -44,11 +44,11 @@ def test_tooltip_fresh_status_keeps_usage_rows_and_reset_details():
     tooltip = manager._build_tooltip()
 
     assert "CODEX USAGE" in tooltip
-    assert "5h |" in tooltip
-    assert "7d |" in tooltip
-    assert "RESETS: 1" in tooltip
+    assert "5h [" in tooltip
+    assert "7d [" in tooltip
+    assert "1 reset available" in tooltip
     assert "expires" in tooltip
-    assert "Updated 10m ago" in tooltip
+    assert "10m ago" in tooltip
     assert len(tooltip) <= TrayManager.TOOLTIP_MAX_LENGTH
 
 
@@ -60,7 +60,7 @@ def test_tooltip_stale_status_shows_age_and_keeps_rows():
     tooltip = manager._build_tooltip()
 
     assert "Stale · 30m ago" in tooltip
-    assert "RESETS: 1" in tooltip
+    assert "1 reset available" in tooltip
     assert len(tooltip) <= TrayManager.TOOLTIP_MAX_LENGTH
 
 
@@ -72,8 +72,8 @@ def test_tooltip_auth_required_keeps_rows_and_fits_length_limit():
     tooltip = manager._build_tooltip()
 
     assert "Login required" in tooltip
-    assert "5h |" in tooltip
-    assert "RESETS: 1" in tooltip
+    assert "5h [" in tooltip
+    assert "1 reset available" in tooltip
     assert len(tooltip) <= TrayManager.TOOLTIP_MAX_LENGTH
 
 
@@ -183,10 +183,10 @@ def test_tooltip_worst_case_fits_and_keeps_status_age():
 
     assert len(tooltip) <= TrayManager.TOOLTIP_MAX_LENGTH
     assert "Login required · 12d ago" in tooltip
-    assert "RESETS: 12" in tooltip
+    assert "12 resets available" in tooltip
     assert "expires" not in tooltip
-    assert "5h |" in tooltip
-    assert "7d |" in tooltip
+    assert "5h [" in tooltip
+    assert "7d [" in tooltip
 
 
 def test_tooltip_fallback_leads_with_status_when_nothing_fits(monkeypatch):

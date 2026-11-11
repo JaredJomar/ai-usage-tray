@@ -148,7 +148,7 @@ def test_tooltip_includes_reset_count_and_nearest_credit_expiry():
 
     tooltip = manager._build_tooltip()
 
-    assert "RESETS: 3" in tooltip
+    assert "3 resets available" in tooltip
     assert "expires" in tooltip
 
 

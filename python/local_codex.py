@@ -12,7 +12,7 @@ import sqlite3
 import os
 import threading
 from contextlib import contextmanager
-from collections import Counter
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -72,9 +72,12 @@ class TokenUsageRecord:
     output_tokens: int
 
 
-_TOKEN_USAGE_CACHE: dict[str, tuple[int, int, tuple[TokenUsageRecord, ...]]] = {}
+_TOKEN_USAGE_CACHE: OrderedDict[str, tuple[int, int, tuple[TokenUsageRecord, ...]]] = OrderedDict()
 _TOKEN_USAGE_CACHE_LOCK = threading.Lock()
 _OPENCODE_USAGE_CACHE: tuple[int, int, int, int, tuple[TokenUsageRecord, ...]] | None = None
+_TOKEN_USAGE_CACHE_MAX_FILES = 128
+_TOKEN_USAGE_CACHE_MAX_RECORDS = 50000
+_TOKEN_USAGE_RETENTION_DAYS = 100
 
 
 def _nonnegative_token_count(value: Any) -> int:
@@ -83,7 +86,9 @@ def _nonnegative_token_count(value: Any) -> int:
     return int(value)
 
 
-def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord, ...]:
+def _read_token_usage_file(
+    path: Path, base_dir: Path, cutoff: datetime,
+) -> tuple[TokenUsageRecord, ...]:
     try:
         resolved = path.resolve()
         resolved.relative_to(base_dir.resolve())
@@ -92,10 +97,23 @@ def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord
         return ()
 
     cache_key = str(resolved).casefold()
+    if stat.st_mtime < cutoff.timestamp():
+        with _TOKEN_USAGE_CACHE_LOCK:
+            _TOKEN_USAGE_CACHE.pop(cache_key, None)
+        return ()
+
     with _TOKEN_USAGE_CACHE_LOCK:
         cached = _TOKEN_USAGE_CACHE.get(cache_key)
         if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-            return cached[2]
+            records = tuple(
+                record for record in cached[2]
+                if (record_time := _as_datetime(record.timestamp)) is not None
+                and record_time >= cutoff
+            )
+            if len(records) != len(cached[2]):
+                _TOKEN_USAGE_CACHE[cache_key] = (cached[0], cached[1], records)
+            _TOKEN_USAGE_CACHE.move_to_end(cache_key)
+            return records
 
     models_by_turn: dict[str, str] = {}
     pending: list[tuple[str, str, str, dict[str, Any]]] = []
@@ -115,11 +133,18 @@ def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord
                     continue
                 kind = event.get("type")
                 if kind == "turn_context":
+                    event_time = _as_datetime(event.get("timestamp"))
+                    if event_time is None or event_time < cutoff:
+                        continue
                     turn_id = payload.get("turn_id")
                     model = payload.get("model")
                     if isinstance(turn_id, str) and isinstance(model, str):
                         models_by_turn[turn_id] = model.strip()
                 elif kind == "token_usage_record":
+                    timestamp = _format_timestamp(event.get("timestamp"))
+                    event_time = _as_datetime(timestamp)
+                    if event_time is None or event_time < cutoff:
+                        continue
                     response_id = payload.get("response_id")
                     if isinstance(response_id, str) and response_id in seen_responses:
                         continue
@@ -130,8 +155,7 @@ def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord
                     usage = payload.get("usage")
                     if not isinstance(usage, dict):
                         continue
-                    timestamp = _format_timestamp(event.get("timestamp"))
-                    if timestamp and isinstance(turn_id, str):
+                    if isinstance(turn_id, str):
                         pending.append((timestamp, session_id if isinstance(session_id, str) else "", turn_id, usage))
     except (OSError, UnicodeDecodeError):
         return ()
@@ -150,6 +174,12 @@ def _read_token_usage_file(path: Path, base_dir: Path) -> tuple[TokenUsageRecord
     )
     with _TOKEN_USAGE_CACHE_LOCK:
         _TOKEN_USAGE_CACHE[cache_key] = (stat.st_mtime_ns, stat.st_size, records)
+        _TOKEN_USAGE_CACHE.move_to_end(cache_key)
+        while (
+            len(_TOKEN_USAGE_CACHE) > _TOKEN_USAGE_CACHE_MAX_FILES
+            or sum(len(item[2]) for item in _TOKEN_USAGE_CACHE.values()) > _TOKEN_USAGE_CACHE_MAX_RECORDS
+        ):
+            _TOKEN_USAGE_CACHE.popitem(last=False)
     return records
 
 
@@ -160,6 +190,7 @@ def read_token_usage_records(codex_dir: Optional[Path] = None) -> tuple[TokenUsa
     results are cached by size and mtime so dashboard refreshes stay lightweight.
     """
     base_dir = (codex_dir or CODEX_DIR).resolve()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_TOKEN_USAGE_RETENTION_DAYS)
     records: list[TokenUsageRecord] = []
     for folder_name in ("sessions", "archived_sessions"):
         folder = base_dir / folder_name
@@ -168,10 +199,11 @@ def read_token_usage_records(codex_dir: Optional[Path] = None) -> tuple[TokenUsa
         try:
             paths = folder.rglob("rollout-*.jsonl")
             for path in paths:
-                records.extend(_read_token_usage_file(path, base_dir))
+                records.extend(_read_token_usage_file(path, base_dir, cutoff))
         except OSError:
             continue
-    return tuple(sorted(records, key=lambda item: item.timestamp))
+    records.sort(key=lambda item: item.timestamp)
+    return tuple(records[-_TOKEN_USAGE_CACHE_MAX_RECORDS:])
 
 
 def read_opencode_token_usage_records(
