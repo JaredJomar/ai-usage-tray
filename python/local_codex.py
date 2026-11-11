@@ -267,7 +267,7 @@ def read_opencode_token_usage_records(
     except (OSError, sqlite3.Error):
         return ()
 
-    result = tuple(sorted(records, key=lambda item: item.timestamp))
+    result = tuple(sorted(records, key=lambda item: item.timestamp)[-_TOKEN_USAGE_CACHE_MAX_RECORDS:])
     with _TOKEN_USAGE_CACHE_LOCK:
         _OPENCODE_USAGE_CACHE = (stat.st_mtime_ns, stat.st_size, wal_mtime, wal_size, result)
     return result

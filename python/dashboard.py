@@ -22,6 +22,10 @@ from PyQt6.QtWidgets import (
 )
 
 from cache import CacheManager
+from analytics_cache import (
+    read_cached_token_usage_records,
+    save_cached_token_usage_records,
+)
 from config import AppConfig, SectionVisibility, set_dark_mode, set_section_visibility
 from local_codex import (
     LocalCodexSnapshot,
@@ -808,6 +812,7 @@ def build_dashboard_state(
 
 class DashboardRefreshWorker(QThread):
     cached = pyqtSignal(object, object, object, object)
+    analytics_cached = pyqtSignal(object)
     refreshed = pyqtSignal(object, object, object, object)
 
     def __init__(self, config: AppConfig):
@@ -816,6 +821,10 @@ class DashboardRefreshWorker(QThread):
 
     def run(self) -> None:
         try:
+            cached_records = read_cached_token_usage_records()
+            if cached_records is not None:
+                self.analytics_cached.emit(cached_records)
+
             cache = CacheManager(self._config.cache_ttl_seconds)
             cached = cache.get_entry("codex") if self._config.codex_enabled else None
             if cached is not None:
@@ -826,7 +835,7 @@ class DashboardRefreshWorker(QThread):
                     "Showing saved data while checking for updates",
                 )
                 self.cached.emit(
-                    cached.data, LocalCodexSnapshot(), cached_result, (),
+                    cached.data, LocalCodexSnapshot(), cached_result, None,
                 )
 
             local = read_local_codex_snapshot()
@@ -834,6 +843,10 @@ class DashboardRefreshWorker(QThread):
                 read_token_usage_records() + read_opencode_token_usage_records(),
                 key=lambda item: item.timestamp,
             ))
+            try:
+                save_cached_token_usage_records(token_usage_records)
+            except OSError as error:
+                Logger.error("analytics", "Could not save Analytics cache: {}".format(error))
             usage = None
             result = None
             if self._config.codex_enabled:
@@ -848,7 +861,7 @@ class DashboardRefreshWorker(QThread):
                 None,
                 LocalCodexSnapshot(),
                 FetchResult(STATUS_API_ERROR, None, None, "Unexpected error"),
-                (),
+                None,
             )
 
 
@@ -887,6 +900,7 @@ class DashboardWindow(QWidget):
         self._last_state: Optional[DashboardState] = None
         self._last_usage: Optional[dict] = None
         self._last_success: Optional[float] = None
+        self._token_usage_records: tuple[TokenUsageRecord, ...] = ()
         self._rendered_result: Optional[FetchResult] = None
         self._period_days: Optional[int] = 7
         self._analytics_days = 30
@@ -1675,6 +1689,7 @@ class DashboardWindow(QWidget):
         self._status.setToolTip("")
         self._worker = DashboardRefreshWorker(self._config)
         self._worker.cached.connect(self._render)
+        self._worker.analytics_cached.connect(self._render_cached_analytics)
         self._worker.refreshed.connect(self._render)
         self._worker.finished.connect(self._refresh_finished)
         self._worker.finished.connect(self._worker.deleteLater)
@@ -1703,7 +1718,7 @@ class DashboardWindow(QWidget):
     def _render(
         self, usage: Optional[dict], local: LocalCodexSnapshot,
         result: Optional[FetchResult] = None,
-        token_usage_records: tuple[TokenUsageRecord, ...] = (),
+        token_usage_records: Optional[tuple[TokenUsageRecord, ...]] = None,
     ) -> None:
         if result is not None and usage is None and self._last_usage is not None:
             usage = self._last_usage
@@ -1715,10 +1730,12 @@ class DashboardWindow(QWidget):
             self._last_usage = usage
             if result is not None and result.last_success is not None:
                 self._last_success = result.last_success
+        if token_usage_records is not None:
+            self._token_usage_records = token_usage_records
         self._rendered_result = result
         state = build_dashboard_state(
             usage, local, history=tuple(read_usage_snapshots()), result=result,
-            token_usage_records=token_usage_records,
+            token_usage_records=self._token_usage_records,
         )
         self._last_state = state
         for parts, used_text, reset_text in (
@@ -1771,6 +1788,12 @@ class DashboardWindow(QWidget):
             row.addWidget(detail_label)
             self._model_list.addWidget(row_widget)
 
+    def _render_cached_analytics(
+        self, token_usage_records: tuple[TokenUsageRecord, ...],
+    ) -> None:
+        self._token_usage_records = token_usage_records
+        self._update_analytics()
+
     def _update_status_display(self) -> None:
         """Refresh only the subtitle from the last fetch result without a network call."""
         if self._worker is not None and self._worker.isRunning():
@@ -1789,7 +1812,7 @@ class DashboardWindow(QWidget):
             self._analytics_headline.setText("Loading local usage…")
             return
         cost_data = calculate_cost_analytics(
-            state.token_usage_records, self._analytics_days,
+            self._token_usage_records, self._analytics_days,
         )
         metric = self._analytics_metric
         self._analytics_cost_details.setVisible(metric in ("cost", "tokens"))

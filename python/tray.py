@@ -18,6 +18,8 @@ import pystray
 
 from config import AppConfig, load_config, save_config
 from cache import CacheManager
+from analytics_cache import save_cached_token_usage_records
+from local_codex import read_opencode_token_usage_records, read_token_usage_records
 from providers.codex import (
     CodexProvider,
     FetchResult,
@@ -36,6 +38,7 @@ APP_NAME = "AIUsageTray"
 class TrayManager:
     TOOLTIP_MAX_LENGTH = 127
     STATUS_TICK_SECONDS = 30
+    ANALYTICS_REFRESH_MIN_SECONDS = 300
 
     _codex_data: Optional[dict] = None
     _refreshing: bool = False
@@ -54,6 +57,7 @@ class TrayManager:
         self._credit_alerts_sent: set[tuple[str, str, int]] = set()
         self._credit_alert_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
+        self._analytics_refresh_lock = threading.Lock()
         self._window_launch_lock = threading.Lock()
         self._last_dashboard_launch = 0.0
         
@@ -128,6 +132,7 @@ class TrayManager:
             menu=menu
         )
         
+        self._refresh_analytics_cache_async()
         threading.Thread(target=self._refresh_loop, daemon=True).start()
         threading.Thread(target=self._refresh_usage, daemon=True).start()
         
@@ -135,6 +140,11 @@ class TrayManager:
     
     def _refresh_loop(self):
         next_refresh = time.monotonic() + self._config.refresh_interval_seconds
+        analytics_interval = max(
+            self.ANALYTICS_REFRESH_MIN_SECONDS,
+            self._config.refresh_interval_seconds,
+        )
+        next_analytics_refresh = time.monotonic() + analytics_interval
         while self._running:
             time.sleep(self.STATUS_TICK_SECONDS)
             if not self._running:
@@ -145,8 +155,38 @@ class TrayManager:
                     next_refresh = time.monotonic() + self._config.refresh_interval_seconds
                 else:
                     self._update_status_display()
+                if time.monotonic() >= next_analytics_refresh:
+                    self._refresh_analytics_cache_async()
+                    next_analytics_refresh = time.monotonic() + analytics_interval
             except Exception as error:
                 Logger.error("tray", "Refresh loop tick failed: {}".format(error))
+
+    def _refresh_analytics_cache_async(self) -> None:
+        lock = getattr(self, "_analytics_refresh_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._analytics_refresh_lock = lock
+        if not lock.acquire(blocking=False):
+            return
+        threading.Thread(
+            target=self._refresh_analytics_cache,
+            args=(lock,),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _refresh_analytics_cache(lock: threading.Lock) -> None:
+        try:
+            records = tuple(sorted(
+                read_token_usage_records() + read_opencode_token_usage_records(),
+                key=lambda item: item.timestamp,
+            ))
+            save_cached_token_usage_records(records)
+            Logger.info("analytics", "Background cache updated with {} token records".format(len(records)))
+        except Exception as error:
+            Logger.error("analytics", "Background cache refresh failed: {}".format(error))
+        finally:
+            lock.release()
 
     def _ensure_refresh_lock(self) -> threading.Lock:
         lock = getattr(self, "_refresh_lock", None)
@@ -588,6 +628,7 @@ class TrayManager:
         return color, start_stop[2]
     
     def _on_refresh(self, icon, item):
+        self._refresh_analytics_cache_async()
         threading.Thread(target=self._refresh_usage, daemon=True).start()
 
     def _launch_window(self, argument: str):
