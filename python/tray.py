@@ -43,6 +43,8 @@ class TrayManager:
     _codex_data: Optional[dict] = None
     _refreshing: bool = False
     _last_fetch: Optional[FetchResult] = None
+    _last_notify_time: datetime = datetime.min
+    _last_notified_level: Optional[str] = None
 
     def __init__(self, config: AppConfig):
         self._config = config
@@ -54,6 +56,7 @@ class TrayManager:
         self._refreshing = False
         self._last_fetch: Optional[FetchResult] = None
         self._last_notify_time = datetime.min
+        self._last_notified_level: Optional[str] = None  # resend only on level change
         self._credit_alerts_sent: set[tuple[str, str, int]] = set()
         self._credit_alert_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
@@ -480,20 +483,28 @@ class TrayManager:
             return
 
         self._check_reset_credit_notifications(datetime.now(timezone.utc))
-
         now = datetime.now()
         cooldown = timedelta(minutes=self._config.notify_cooldown_minutes)
-        
         if now - self._last_notify_time < cooldown:
             return
-        
+
         usage = self._codex_data["five_hour"]
         if usage >= self._config.notify_critical_threshold:
-            self._send_notification("codex", usage, "critical")
-            self._last_notify_time = now
+            current_level = "critical"
         elif usage >= self._config.notify_warn_threshold:
-            self._send_notification("codex", usage, "normal")
-            self._last_notify_time = now
+            current_level = "normal"
+        else:
+            # Usage dropped below both thresholds: reset so next spike triggers again
+            self._last_notified_level = None
+            return
+
+        if current_level == getattr(self, '_last_notified_level', None):
+            # Already notified for this level; stay quiet until it changes
+            return
+
+        self._send_notification("codex", usage, current_level)
+        self._last_notified_level = current_level
+        self._last_notify_time = datetime.now()
 
     def _check_reset_credit_notifications(self, now: datetime) -> None:
         if not self._config.notifications_enabled:

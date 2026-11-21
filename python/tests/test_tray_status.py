@@ -401,3 +401,33 @@ def test_format_age_rejects_non_finite_timestamps():
     assert TrayManager._format_age(float("nan")) is None
     assert TrayManager._format_age(float("inf")) is None
     assert TrayManager._format_age(float("-inf")) is None
+
+
+def test_critical_usage_notification_only_sent_once_until_reset():
+    manager = _manager()
+    manager._config.notifications_enabled = True
+    manager._config.notify_cooldown_minutes = 0
+    notifications = []
+    manager._send_notification = lambda provider, usage, level: notifications.append((provider, usage, level))
+
+    # 1. Critical usage reaches 95% -> triggers 1 notification
+    manager._codex_data = {'five_hour': 95}
+    manager._check_notifications()
+    assert len(notifications) == 1
+    assert notifications[-1] == ('codex', 95, 'critical')
+
+    # 2. Critical usage continues at 95% -> should NOT notify again
+    manager._check_notifications()
+    assert len(notifications) == 1
+
+    # 3. Usage drops below warn threshold (e.g. 50%) -> resets level
+    manager._codex_data = {'five_hour': 50}
+    manager._check_notifications()
+    assert len(notifications) == 1
+    assert manager._last_notified_level is None
+
+    # 4. Critical usage spikes back up to 96% -> triggers new notification
+    manager._codex_data = {'five_hour': 96}
+    manager._check_notifications()
+    assert len(notifications) == 2
+    assert notifications[-1] == ('codex', 96, 'critical')
